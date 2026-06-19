@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spendenlauf — Admin</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0b1117; --surface: #151d27; --border: #1e2a38;
+    --text: #e4e8ed; --text-dim: #7a8a9e; --accent: #00e676;
+    --accent-2: #40c4ff; --danger: #ff5252; --radius: 10px;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text); min-height: 100vh; line-height: 1.5;
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 1rem 1.4rem; background: linear-gradient(135deg, #0d1a26, #132232);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 1.3rem; font-weight: 800; }
+  header h1 span { color: var(--accent); }
+  header a, header button { font-size: 0.85rem; }
+  a { color: var(--accent-2); text-decoration: none; }
+
+  button {
+    font-family: inherit; font-size: 0.85rem; font-weight: 600;
+    padding: 0.5rem 0.9rem; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); cursor: pointer;
+  }
+  button:hover { border-color: var(--text-dim); }
+  button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  button.active  { background: var(--accent-2); color: var(--bg); border-color: var(--accent-2); }
+  button.danger  { color: var(--danger); }
+
+  /* ── Login ──────────────────────────────────── */
+  .login-wrap { display: flex; align-items: center; justify-content: center; padding: 4rem 1rem; }
+  .login-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 2rem; width: 100%; max-width: 360px;
+  }
+  .login-card h2 { font-size: 1.2rem; margin-bottom: 1.2rem; }
+  .field { margin-bottom: 1rem; }
+  .field label { display: block; font-size: 0.78rem; color: var(--text-dim);
+                 text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.3rem; }
+  input[type=text], input[type=password] {
+    width: 100%; padding: 0.6rem 0.7rem; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.95rem;
+  }
+  .login-card button { width: 100%; margin-top: 0.5rem; }
+  .error { color: var(--danger); font-size: 0.85rem; margin-top: 0.6rem; min-height: 1.2em; }
+
+  /* ── Editor layout ──────────────────────────── */
+  .editor { display: grid; grid-template-columns: 320px 1fr; height: calc(100vh - 61px); }
+  @media (max-width: 700px) { .editor { grid-template-columns: 1fr; height: auto; } }
+  .sidebar { background: var(--surface); border-right: 1px solid var(--border);
+             padding: 1.2rem; overflow-y: auto; }
+  #map { height: 100%; min-height: 400px; }
+  @media (max-width: 700px) { #map { height: 60vh; } }
+
+  .section-title { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em;
+                   color: var(--text-dim); margin: 1.2rem 0 0.6rem; }
+  .section-title:first-child { margin-top: 0; }
+  .hint { font-size: 0.78rem; color: var(--text-dim); margin-bottom: 0.7rem; }
+
+  .station-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
+  .station-num {
+    flex: 0 0 26px; height: 26px; border-radius: 50%; background: var(--accent);
+    color: var(--bg); font-weight: 700; font-size: 0.8rem;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .station-row input { flex: 1; padding: 0.4rem 0.5rem; font-size: 0.85rem; }
+  .coord { font-size: 0.7rem; color: var(--text-dim); }
+
+  .btn-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem; }
+  #route-info:not(:empty) {
+    margin-top: 0.9rem; padding: 0.8rem; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 8px; font-size: 0.82rem;
+  }
+  #route-info .lap-total { font-weight: 700; color: var(--accent); font-size: 0.95rem; }
+  #route-info .seg { display: flex; justify-content: space-between; color: var(--text-dim);
+                     margin-top: 0.25rem; }
+  #route-info .seg span:last-child { color: var(--text); font-variant-numeric: tabular-nums; }
+
+  .save-bar { margin-top: 1.4rem; padding-top: 1.2rem; border-top: 1px solid var(--border); }
+  .save-bar button { width: 100%; }
+  .status { font-size: 0.82rem; margin-top: 0.7rem; min-height: 1.2em; }
+  .status.ok  { color: var(--accent); }
+  .status.err { color: var(--danger); }
+
+  .station-marker {
+    display: flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--accent); color: var(--bg);
+    border: 2px solid #fff; font-weight: 700; font-size: 0.8rem;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>🏃 Spenden<span>lauf</span> — Admin</h1>
+    <div>
+      <a href="/">← Dashboard</a>
+      <button id="logout-btn" class="danger" style="display:none; margin-left:1rem;">Abmelden</button>
+    </div>
+  </header>
+
+  <!-- Login -->
+  <div class="login-wrap" id="login-view">
+    <form class="login-card" id="login-form">
+      <h2>Anmeldung</h2>
+      <div class="field">
+        <label for="username">Benutzername</label>
+        <input type="text" id="username" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label for="password">Passwort</label>
+        <input type="password" id="password" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="primary">Einloggen</button>
+      <div class="error" id="login-error"></div>
+    </form>
+  </div>
+
+  <!-- Editor -->
+  <div class="editor" id="editor-view" style="display:none;">
+    <div class="sidebar">
+      <div class="section-title">Stationen</div>
+      <div class="hint">Ziehe die nummerierten Marker auf der Karte an ihren Standort. Namen können hier geändert werden.</div>
+      <div id="station-list"></div>
+
+      <div class="section-title">Strecke planen</div>
+      <div class="hint">„Entlang Straßen“ verbindet die Stationen automatisch zu einer Runde, die den echten Wegen folgt.</div>
+      <div class="btn-row">
+        <button id="road-btn" class="primary">🛣️ Entlang Straßen</button>
+        <button id="clear-btn" class="danger">Löschen</button>
+      </div>
+
+      <div id="route-info"></div>
+
+      <div class="save-bar">
+        <button id="save-btn" class="primary">💾 Speichern</button>
+        <div class="status" id="status"></div>
+      </div>
+    </div>
+    <div id="map"></div>
+  </div>
+
+<script>
+  const API = window.location.origin;
+  // Schyrenbad / Sachsenstraße, München-Au.
+  const DEFAULT_VIEW   = { center: [48.1157, 11.5798], zoom: 16 };
+  // The Spendenlauf is in Munich → keep the map within the city.
+  const MUNICH_BOUNDS  = [[48.06, 11.36], [48.25, 11.72]];
+  const MIN_ZOOM       = 11;
+
+  const loginView  = document.getElementById('login-view');
+  const editorView = document.getElementById('editor-view');
+  const logoutBtn  = document.getElementById('logout-btn');
+
+  let map = null;
+  let routePts = [];          // [[lat,lng], …]
+  let routeLine = null;
+  let routeSegments = null;   // [m, …] leg distances 1→2,2→3,…,N→1
+  let lapDistanceM = null;    // full lap length in metres
+  const markers = {};         // id → marker
+  let stationsData = [];      // [{id, name, …}] from the server
+
+  function numIcon(id) {
+    return L.divIcon({
+      className: '',
+      html: `<div class="station-marker">${id}</div>`,
+      iconSize: [30, 30], iconAnchor: [15, 15],
+    });
+  }
+
+  // ── Auth ──────────────────────────────────────
+  async function checkAuth() {
+    const { authenticated } = await fetch(`${API}/api/auth`).then(r => r.json());
+    if (authenticated) showEditor(); else showLogin();
+  }
+
+  function showLogin() {
+    loginView.style.display = 'flex';
+    editorView.style.display = 'none';
+    logoutBtn.style.display = 'none';
+  }
+
+  async function showEditor() {
+    loginView.style.display = 'none';
+    editorView.style.display = 'grid';
+    logoutBtn.style.display = 'inline-block';
+    await buildEditor();
+  }
+
+  document.getElementById('login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById('login-error');
+    errEl.textContent = '';
+    const res = await fetch(`${API}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: document.getElementById('username').value,
+        password: document.getElementById('password').value,
+      }),
+    });
+    if (res.ok) {
+      showEditor();
+    } else {
+      const data = await res.json().catch(() => ({}));
+      errEl.textContent = data.detail || 'Anmeldung fehlgeschlagen';
+    }
+  });
+
+  logoutBtn.addEventListener('click', async () => {
+    await fetch(`${API}/api/logout`, { method: 'POST' });
+    location.reload();
+  });
+
+  // ── Editor ────────────────────────────────────
+  async function buildEditor() {
+    const [stations, route] = await Promise.all([
+      fetch(`${API}/api/stations`).then(r => r.json()),
+      fetch(`${API}/api/route`).then(r => r.json()),
+    ]);
+    stationsData = stations;
+
+    // Map view: saved view → fit to placed stations → Germany default.
+    const placed = stations.filter(s => s.latitude != null && s.longitude != null);
+    const view = route.map_view ||
+      (placed.length ? null : DEFAULT_VIEW);
+
+    map = L.map('map', {
+      maxBounds: MUNICH_BOUNDS,
+      maxBoundsViscosity: 1.0,
+      minZoom: MIN_ZOOM,
+    });
+    map.setView((view || DEFAULT_VIEW).center, (view || DEFAULT_VIEW).zoom);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, bounds: MUNICH_BOUNDS, attribution: '© OpenStreetMap',
+    }).addTo(map);
+
+    // Existing route + measured distances.
+    routePts = (route.route || []).map(p => [p[0], p[1]]);
+    routeSegments = route.segments || null;
+    lapDistanceM  = route.lap_distance_m || null;
+    redrawRoute();
+    renderRouteInfo();
+
+    // Station markers — placed at saved coords, else spread near map centre.
+    const center = view ? view.center : DEFAULT_VIEW.center;
+    stations.forEach((s, i) => {
+      const lat = s.latitude  != null ? s.latitude  : center[0] + i * 0.0010;
+      const lng = s.longitude != null ? s.longitude : center[1] + i * 0.0010;
+      const m = L.marker([lat, lng], { draggable: true, icon: numIcon(s.id) }).addTo(map);
+      m.on('drag', () => updateCoordLabel(s.id));
+      m.on('dragend', () => updateCoordLabel(s.id));
+      markers[s.id] = m;
+    });
+
+    // Fit view to everything if nothing explicit was saved.
+    if (!route.map_view) {
+      const pts = stations.map(s => markers[s.id].getLatLng())
+                          .map(ll => [ll.lat, ll.lng]).concat(routePts);
+      if (pts.length) map.fitBounds(pts, { padding: [40, 40] });
+    }
+
+    buildStationList(stations);
+  }
+
+  function buildStationList(stations) {
+    const list = document.getElementById('station-list');
+    list.innerHTML = '';
+    stations.forEach(s => {
+      const row = document.createElement('div');
+      row.innerHTML = `
+        <div class="station-row">
+          <div class="station-num">${s.id}</div>
+          <input type="text" id="name-${s.id}" value="${s.name.replace(/"/g, '&quot;')}">
+        </div>
+        <div class="coord" id="coord-${s.id}"></div>`;
+      list.appendChild(row);
+      updateCoordLabel(s.id);
+      // Keep the route distance labels in sync with edited names.
+      row.querySelector('input').addEventListener('input', renderRouteInfo);
+    });
+  }
+
+  function updateCoordLabel(id) {
+    const ll = markers[id].getLatLng();
+    document.getElementById(`coord-${id}`).textContent =
+      `${ll.lat.toFixed(5)}, ${ll.lng.toFixed(5)}`;
+  }
+
+  function redrawRoute() {
+    if (routeLine) map.removeLayer(routeLine);
+    routeLine = L.polyline(routePts, { color: '#00e676', weight: 4 }).addTo(map);
+  }
+
+  // ── Route along real streets (OSRM) ───────────
+  document.getElementById('road-btn').addEventListener('click', async () => {
+    const status = document.getElementById('status');
+    status.className = 'status';
+    status.textContent = 'Route entlang der Straßen wird berechnet…';
+
+    // Visit stations in id order, then close the loop back to the first.
+    const ids = Object.keys(markers).map(Number).sort((a, b) => a - b);
+    const stops = ids.map(id => markers[id].getLatLng());
+    if (stops.length < 2) { status.textContent = 'Zu wenige Stationen.'; return; }
+    stops.push(stops[0]);
+    const coordStr = stops.map(ll => `${ll.lng},${ll.lat}`).join(';');
+
+    try {
+      // FOSSGIS foot router — follows footpaths & Feldwege (e.g. Englischer Garten),
+      // not just drivable roads.
+      const res = await fetch(
+        `https://routing.openstreetmap.de/routed-foot/route/v1/foot/${coordStr}` +
+        `?overview=full&geometries=geojson`);
+      const data = await res.json();
+      if (data.code !== 'Ok' || !data.routes.length) throw new Error(data.code);
+      const rt = data.routes[0];
+      routePts = rt.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+      routeSegments = rt.legs.map(l => Math.round(l.distance * 10) / 10);
+      lapDistanceM  = Math.round(rt.distance * 10) / 10;
+      redrawRoute();
+      renderRouteInfo();
+      status.className = 'status ok';
+      status.textContent = '✔ Strecke entlang der Wege erstellt — zum Übernehmen speichern.';
+    } catch (err) {
+      status.className = 'status err';
+      status.textContent = 'Routing fehlgeschlagen (Router nicht erreichbar).';
+    }
+  });
+
+  function fmtDist(m) {
+    return m >= 1000 ? (m / 1000).toFixed(2) + ' km' : Math.round(m) + ' m';
+  }
+
+  function stationName(id) {
+    const inp = document.getElementById(`name-${id}`);
+    if (inp && inp.value.trim()) return inp.value.trim();
+    const s = stationsData.find(x => x.id === id);
+    return s && s.name ? s.name : `Station ${id}`;
+  }
+
+  function renderRouteInfo() {
+    const el = document.getElementById('route-info');
+    if (!routeSegments || !lapDistanceM) { el.innerHTML = ''; return; }
+    const ids = stationsData.map(s => s.id).sort((a, b) => a - b);
+    let html = `<div class="lap-total">Rundenlänge: ${fmtDist(lapDistanceM)}</div>`;
+    routeSegments.forEach((d, i) => {
+      const from = ids[i];
+      const to   = ids[(i + 1) % ids.length];
+      html += `<div class="seg"><span>${stationName(from)} → ${stationName(to)}</span>` +
+              `<span>${fmtDist(d)}</span></div>`;
+    });
+    el.innerHTML = html;
+  }
+
+  // ── Route tools ───────────────────────────────
+  document.getElementById('clear-btn').addEventListener('click', () => {
+    routePts = []; routeSegments = null; lapDistanceM = null;
+    renderRouteInfo(); redrawRoute();
+  });
+
+  // ── Save ──────────────────────────────────────
+  document.getElementById('save-btn').addEventListener('click', async () => {
+    const status = document.getElementById('status');
+    status.className = 'status';
+    status.textContent = 'Speichern…';
+
+    const stations = Object.entries(markers).map(([id, m]) => {
+      const ll = m.getLatLng();
+      return {
+        id: Number(id),
+        name: document.getElementById(`name-${id}`).value.trim() || `Station ${id}`,
+        latitude: ll.lat,
+        longitude: ll.lng,
+      };
+    });
+    const c = map.getCenter();
+    const payload = {
+      route: routePts,
+      map_view: { center: [c.lat, c.lng], zoom: map.getZoom() },
+      segments: routeSegments,
+      lap_distance_m: lapDistanceM,
+    };
+
+    try {
+      const r1 = await fetch(`${API}/api/stations`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(stations),
+      });
+      const r2 = await fetch(`${API}/api/route`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (r1.ok && r2.ok) {
+        status.className = 'status ok';
+        status.textContent = '✔ Gespeichert. Das Dashboard zeigt die Karte jetzt an.';
+      } else if (r1.status === 401 || r2.status === 401) {
+        status.className = 'status err';
+        status.textContent = 'Sitzung abgelaufen — bitte neu anmelden.';
+        setTimeout(() => location.reload(), 1500);
+      } else {
+        throw new Error('save failed');
+      }
+    } catch (err) {
+      status.className = 'status err';
+      status.textContent = 'Fehler beim Speichern.';
+    }
+  });
+
+  checkAuth();
+</script>
+</body>
+</html>

@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spendenlauf — Live Tracker</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<style>
+  /* ── Reset & base ────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0b1117;
+    --surface:   #151d27;
+    --border:    #1e2a38;
+    --text:      #e4e8ed;
+    --text-dim:  #7a8a9e;
+    --accent:    #00e676;
+    --accent-2:  #40c4ff;
+    --gold:      #ffd740;
+    --silver:    #b0bec5;
+    --bronze:    #ff8a65;
+    --danger:    #ff5252;
+    --radius:    10px;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    line-height: 1.5;
+  }
+
+  /* ── Header ──────────────────────────────────── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.65rem 1.6rem;
+    background: linear-gradient(135deg, #0d1a26 0%, #132232 100%);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 {
+    font-size: clamp(1.4rem, 3.5vw, 2.2rem);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+  header h1 span { color: var(--accent); }
+  .subtitle {
+    color: var(--text-dim);
+    font-size: 0.9rem;
+    white-space: nowrap;
+  }
+  .live-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    background: var(--accent);
+    border-radius: 50%;
+    margin-right: 6px;
+    animation: pulse 1.5s infinite;
+    vertical-align: middle;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: .4; transform: scale(1.4); }
+  }
+
+  /* ── Layout ──────────────────────────────────── */
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 1.5rem 1rem;
+  }
+
+  /* ── Stat cards ──────────────────────────────── */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0.8rem;
+    margin-bottom: 1.8rem;
+  }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 1.1rem;
+    text-align: center;
+  }
+  .stat-card .value {
+    font-size: 2rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.1;
+  }
+  .stat-card .label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    margin-top: 0.3rem;
+  }
+  .stat-card.laps   .value { color: var(--accent); }
+  .stat-card.dist   .value { color: var(--accent-2); }
+  .stat-card.money  .value { color: var(--gold); }
+  .stat-card.pace   .value { color: var(--accent-2); }
+
+  /* ── Two-column: leaderboard left, map right ─── */
+  .main-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.4rem;
+    align-items: stretch;
+  }
+  /* Allow each column to shrink below its content width so the leaderboard
+     can scroll internally rather than overflow the panel border. */
+  .main-grid > * { min-width: 0; }
+  @media (max-width: 800px) {
+    .main-grid { grid-template-columns: 1fr; }
+  }
+  .course-panel { display: flex; flex-direction: column; }
+
+  /* ── Leaderboard ─────────────────────────────── */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .panel-title {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    padding: 0.9rem 1.1rem 0.5rem;
+  }
+
+  /* Let the leaderboard scroll horizontally instead of being clipped by the
+     panel border when the column is narrow. */
+  #leaderboard-body { overflow-x: auto; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.86rem;
+  }
+  th {
+    text-align: left;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    padding: 0.5rem 0.5rem;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+  }
+  td {
+    padding: 0.55rem 0.5rem;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  .rank { font-weight: 700; width: 2.5rem; text-align: center; }
+  .rank-1 { color: var(--gold); }
+  .rank-2 { color: var(--silver); }
+  .rank-3 { color: var(--bronze); }
+
+  .bib {
+    display: inline-block;
+    background: var(--border);
+    color: var(--text);
+    font-weight: 700;
+    font-size: 0.78rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    min-width: 2.4rem;
+    text-align: center;
+  }
+
+  .laps-cell {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .dist-cell {
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .donation-cell {
+    color: var(--gold);
+    font-variant-numeric: tabular-nums;
+  }
+  .pace-cell {
+    color: var(--accent-2);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .station-badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.15rem 0.45rem;
+    border-radius: 4px;
+    background: rgba(0,230,118,0.12);
+    color: var(--accent);
+  }
+  .station-badge.none {
+    background: rgba(122,138,158,0.12);
+    color: var(--text-dim);
+  }
+
+  .empty-state {
+    padding: 3rem 1rem;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+  }
+
+  /* ── Course map (Leaflet) ────────────────────── */
+  #course-map {
+    flex: 1;
+    min-height: 560px;
+    width: 100%;
+    border-radius: 0 0 var(--radius) var(--radius);
+    background: var(--bg);
+  }
+  @media (max-width: 800px) {
+    #course-map { min-height: 380px; }
+  }
+  /* Runner pins (initials) */
+  .runner-pin {
+    width: 28px; height: 28px;
+    background: var(--gold);
+    border: 2px solid #fff;
+    border-radius: 50% 50% 50% 0;
+    transform: rotate(45deg);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 1px 5px rgba(0,0,0,0.55);
+  }
+  .runner-pin span {
+    transform: rotate(-45deg);
+    font-size: 0.7rem; font-weight: 800; color: #1a1200;
+  }
+  .map-empty {
+    padding: 2.5rem 1rem;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+  }
+  /* Numbered station markers drawn with a DivIcon */
+  .station-marker {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: var(--border);
+    color: var(--text);
+    border: 2px solid var(--text-dim);
+    font-weight: 700;
+    font-size: 0.8rem;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+  }
+  .station-marker.active {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+  }
+  .leaflet-popup-content { font-size: 0.85rem; }
+
+  /* ── Footer ──────────────────────────────────── */
+  footer {
+    text-align: center;
+    padding: 2rem 1rem;
+    color: var(--text-dim);
+    font-size: 0.75rem;
+  }
+  footer span { color: var(--accent); }
+</style>
+</head>
+
+<body>
+  <header>
+    <h1>Spenden<span>lauf</span></h1>
+    <div class="subtitle"><span class="live-dot"></span>Live Tracker (3s)</div>
+  </header>
+
+  <div class="container">
+    <!-- Stats row -->
+    <div class="stats">
+      <div class="stat-card laps">
+        <div class="value" id="s-laps">—</div>
+        <div class="label">Runden</div>
+      </div>
+      <div class="stat-card dist">
+        <div class="value" id="s-dist">—</div>
+        <div class="label">Kilometer</div>
+      </div>
+      <div class="stat-card money">
+        <div class="value" id="s-money">—</div>
+        <div class="label">Spenden €</div>
+      </div>
+      <div class="stat-card">
+        <div class="value" id="s-runners">—</div>
+        <div class="label">Aktive Läufer</div>
+      </div>
+      <div class="stat-card pace">
+        <div class="value" id="s-pace">—</div>
+        <div class="label">Ø Tempo /km</div>
+      </div>
+    </div>
+
+    <!-- Leaderboard left, map right -->
+    <div class="main-grid">
+      <!-- Leaderboard -->
+      <div class="panel" id="leaderboard-panel">
+        <div class="panel-title">Bestenliste</div>
+        <div id="leaderboard-body"></div>
+      </div>
+
+      <!-- Course map -->
+      <div class="panel course-panel">
+        <div class="panel-title">Karte</div>
+        <div id="course-map"></div>
+        <div class="map-empty" id="map-empty" style="display:none;">
+          Stationen noch nicht platziert.<br>
+          Im <a href="/admin" style="color:var(--accent-2)">Admin-Bereich</a> einrichten.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Powered by <span>ESP32 + BLE</span>
+    &nbsp;·&nbsp; <a href="/admin" style="color:var(--text-dim)">Admin</a>
+  </footer>
+
+<script>
+  // ── Config ────────────────────────────────────
+  const API          = window.location.origin;
+  const POLL_MS      = 3000;
+  const DEFAULT_VIEW  = { center: [48.1157, 11.5798], zoom: 16 };  // Schyrenbad, München-Au
+  const MUNICH_BOUNDS = [[48.06, 11.36], [48.25, 11.72]];
+  const MIN_ZOOM      = 11;
+
+  // ── Leaflet map setup ─────────────────────────
+  let map = null;
+  let routeLine = null;
+  const markers = {};        // station id → Leaflet marker
+  const stationCoords = {};  // station id → [lat, lng]
+  let runnerMarkers = [];     // current top-runner pins
+
+  function stationIcon(id, count) {
+    const active = count > 0;
+    return L.divIcon({
+      className: '',
+      html: `<div class="station-marker ${active ? 'active' : ''}">${id}</div>`,
+      iconSize: [30, 30],
+      iconAnchor: [15, 15],
+    });
+  }
+
+  async function initMap() {
+    const [stations, route] = await Promise.all([
+      fetch(`${API}/api/stations`).then(r => r.json()),
+      fetch(`${API}/api/route`).then(r => r.json()),
+    ]);
+
+    const placed = stations.filter(s => s.latitude != null && s.longitude != null);
+    if (!placed.length && !(route.route && route.route.length)) {
+      // Nothing has been set up yet → show hint instead of an empty map.
+      document.getElementById('course-map').style.display = 'none';
+      document.getElementById('map-empty').style.display = 'block';
+      return;
+    }
+
+    map = L.map('course-map', {
+      scrollWheelZoom: false,
+      maxBounds: MUNICH_BOUNDS,
+      maxBoundsViscosity: 1.0,
+      minZoom: MIN_ZOOM,
+    });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      bounds: MUNICH_BOUNDS,
+      attribution: '© OpenStreetMap',
+    }).addTo(map);
+
+    if (route.route && route.route.length) {
+      routeLine = L.polyline(route.route, { color: '#00e676', weight: 4 }).addTo(map);
+    }
+
+    placed.forEach(s => {
+      stationCoords[s.id] = [s.latitude, s.longitude];
+      const m = L.marker([s.latitude, s.longitude], {
+        icon: stationIcon(s.id, 0),
+      }).addTo(map).bindPopup(`<b>${s.name}</b>`);
+      m.stationName = s.name;
+      markers[s.id] = m;
+    });
+
+    // Centre on the middle of all markers, zoomed so every marker is visible.
+    const bounds = placed.map(s => [s.latitude, s.longitude]).concat(route.route || []);
+    if (bounds.length) map.fitBounds(bounds, { padding: [45, 45], maxZoom: 17 });
+    else map.setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
+  }
+
+  // ── Render helpers ────────────────────────────
+
+  function rankClass(i) {
+    if (i === 0) return 'rank-1';
+    if (i === 1) return 'rank-2';
+    if (i === 2) return 'rank-3';
+    return '';
+  }
+
+  // Pace in min/km → "M:SS" (e.g. 5.5 → "5:30").
+  function fmtPace(minPerKm) {
+    if (!minPerKm || minPerKm <= 0) return '—';
+    const total = Math.round(minPerKm * 60);
+    const m = Math.floor(total / 60), s = total % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+
+  function timeAgo(iso) {
+    if (!iso) return '—';
+    const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (diff < 60)   return `${Math.round(diff)}s`;
+    if (diff < 3600) return `${Math.round(diff / 60)}m`;
+    return `${Math.round(diff / 3600)}h`;
+  }
+
+  function renderLeaderboard(rows) {
+    const el = document.getElementById('leaderboard-body');
+    if (!rows.length) {
+      el.innerHTML = `<div class="empty-state">Noch keine Läufer registriert.<br>
+        Starte <code>python simulate.py</code> zum Testen.</div>`;
+      return;
+    }
+
+    let html = `<table><thead><tr>
+      <th>#</th><th>Nr.</th><th>Name</th><th>Runden</th>
+      <th>km</th><th>Tempo</th><th>Station</th><th>Spende</th>
+    </tr></thead><tbody>`;
+
+    rows.forEach((r, i) => {
+      const st = r.last_station_id
+        ? `<span class="station-badge">S${r.last_station_id}</span>`
+        : `<span class="station-badge none">—</span>`;
+      const don = r.donations > 0 ? `€${r.donations.toFixed(2)}` : '—';
+      html += `<tr>
+        <td class="rank ${rankClass(i)}">${i + 1}</td>
+        <td><span class="bib">${r.bib_number}</span></td>
+        <td>${r.name}</td>
+        <td class="laps-cell">${r.laps}</td>
+        <td class="dist-cell">${r.distance_km.toFixed(2)}</td>
+        <td class="pace-cell">${fmtPace(r.pace_min_km)}</td>
+        <td>${st}</td>
+        <td class="donation-cell">${don}</td>
+      </tr>`;
+    });
+
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  }
+
+  function renderStats(s) {
+    document.getElementById('s-laps').textContent    = s.total_laps;
+    document.getElementById('s-dist').textContent    = s.total_distance_km.toFixed(1);
+    document.getElementById('s-money').textContent   = s.total_donations.toFixed(2);
+    document.getElementById('s-runners').textContent = s.active_runners;
+    document.getElementById('s-pace').textContent    = fmtPace(s.avg_pace_min_km);
+  }
+
+  function renderCourseMap(rows) {
+    if (!map) return;
+    // Count runners currently at each station.
+    const counts = {};
+    rows.forEach(r => {
+      if (r.last_station_id) counts[r.last_station_id] = (counts[r.last_station_id] || 0) + 1;
+    });
+
+    Object.entries(markers).forEach(([id, marker]) => {
+      const n = counts[id] || 0;
+      marker.setIcon(stationIcon(id, n));
+      marker.setPopupContent(`<b>${marker.stationName}</b><br>${n} Läufer aktuell hier`);
+    });
+  }
+
+  // Initials: first letter of first name + first letter of last name.
+  function initials(name) {
+    const p = (name || '').trim().split(/\s+/).filter(Boolean);
+    if (!p.length) return '?';
+    return ((p[0][0] || '') + (p.length > 1 ? p[p.length - 1][0] : '')).toUpperCase();
+  }
+
+  function runnerIcon(text) {
+    return L.divIcon({
+      className: '',
+      html: `<div class="runner-pin"><span>${text}</span></div>`,
+      iconSize: [28, 28],
+      iconAnchor: [14, 28],
+      popupAnchor: [0, -26],
+    });
+  }
+
+  // Show the current top 10 runners as pins at the station they last passed.
+  function renderRunnerPins(rows) {
+    if (!map) return;
+    runnerMarkers.forEach(m => map.removeLayer(m));
+    runnerMarkers = [];
+    const top = rows.slice(0, 10).filter(r => r.last_station_id && stationCoords[r.last_station_id]);
+    const seen = {};   // station id → how many pins already placed there
+    top.forEach((r, idx) => {
+      const base = stationCoords[r.last_station_id];
+      const k = seen[r.last_station_id] = (seen[r.last_station_id] || 0);
+      seen[r.last_station_id]++;
+      // Fan multiple runners at one station around it so pins don't fully overlap.
+      const ang = k * (Math.PI / 3);
+      const rad = k === 0 ? 0 : 0.00016;
+      const m = L.marker([base[0] + rad * Math.cos(ang), base[1] + rad * Math.sin(ang)], {
+        icon: runnerIcon(initials(r.name)), zIndexOffset: 1000,
+      }).addTo(map)
+        .bindPopup(`<b>${r.name}</b><br>Platz ${idx + 1} · ${r.laps} Runden · S${r.last_station_id}`);
+      runnerMarkers.push(m);
+    });
+  }
+
+  // ── Polling loop ──────────────────────────────
+
+  async function refresh() {
+    try {
+      const [lb, st] = await Promise.all([
+        fetch(`${API}/api/leaderboard`).then(r => r.json()),
+        fetch(`${API}/api/stats`).then(r => r.json()),
+      ]);
+      renderLeaderboard(lb);
+      renderStats(st);
+      renderCourseMap(lb);
+      renderRunnerPins(lb);
+    } catch (err) {
+      console.warn('Refresh failed:', err);
+    }
+  }
+
+  initMap().catch(err => console.warn('Map init failed:', err));
+  refresh();
+  setInterval(refresh, POLL_MS);
+</script>
+</body>
+</html>
