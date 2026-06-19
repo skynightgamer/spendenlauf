@@ -559,6 +559,20 @@ def list_beacons():
     return [dict(r) for r in rows]
 
 
+@app.get("/api/beacons/whitelist")
+def beacon_whitelist():
+    """Flat list of all registered beacon MAC addresses.
+
+    Intended for the ESP boards to fetch the BLE scan whitelist.
+    """
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT beacon_mac FROM beacons ORDER BY beacon_mac ASC"
+    ).fetchall()
+    conn.close()
+    return {"macs": [r["beacon_mac"] for r in rows]}
+
+
 @app.post("/api/beacons")
 def add_beacon(beacon: BeaconCreate):
     conn = get_db()

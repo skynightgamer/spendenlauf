@@ -178,9 +178,11 @@ The algorithm is lenient to handle real-world BLE flakiness:
 - Out-of-order scans (going backward) are ignored.
 - Per-station cooldown prevents the same runner being counted twice at one station within 3 minutes.
 
-## ESP32 firmware needed
+## ESP32 firmware
 
-The ESP32 stations need firmware that:
+The ESP32 stations have firmware that:
+
+The code is available under: https://github.com/skynightgamer/spendenlauf_firmware
 
 1. Scans for BLE advertisements
 2. Filters by known beacon MACs or a UUID prefix
