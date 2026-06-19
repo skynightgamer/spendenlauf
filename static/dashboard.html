@@ -233,6 +233,10 @@
     #course-map { min-height: 380px; }
   }
   /* Runner pins (initials) */
+  /* Leaflet positions markers via `transform`; animating it makes pins glide
+     between stations. Suppressed during zoom so they don't drift mid-animation. */
+  .runner-pin-marker { transition: transform 0.8s ease-in-out; }
+  .leaflet-zoom-anim .runner-pin-marker { transition: none; }
   .runner-pin {
     width: 28px; height: 28px;
     background: var(--gold);
@@ -311,7 +315,7 @@
       </div>
       <div class="stat-card pace">
         <div class="value" id="s-pace">—</div>
-        <div class="label">Ø Tempo /km</div>
+        <div class="label">Ø Pace</div>
       </div>
     </div>
 
@@ -325,7 +329,7 @@
 
       <!-- Course map -->
       <div class="panel course-panel">
-        <div class="panel-title">Karte</div>
+        <div class="panel-title">Karte — Top 10 Läufer</div>
         <div id="course-map"></div>
         <div class="map-empty" id="map-empty" style="display:none;">
           Stationen noch nicht platziert.<br>
@@ -353,7 +357,7 @@
   let routeLine = null;
   const markers = {};        // station id → Leaflet marker
   const stationCoords = {};  // station id → [lat, lng]
-  let runnerMarkers = [];     // current top-runner pins
+  const runnerPins = {};     // bib_number → Leaflet marker (persistent, so pins glide)
 
   function stationIcon(id, count) {
     const active = count > 0;
@@ -408,6 +412,16 @@
     const bounds = placed.map(s => [s.latitude, s.longitude]).concat(route.route || []);
     if (bounds.length) map.fitBounds(bounds, { padding: [45, 45], maxZoom: 17 });
     else map.setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
+
+    // The map column stretches taller once the leaderboard fills in, leaving the
+    // lower tiles unloaded until interaction. Re-measure whenever it resizes.
+    const fitToBounds = () => { if (bounds.length) map.fitBounds(bounds, { padding: [45, 45], maxZoom: 17 }); };
+    const mapEl = document.getElementById('course-map');
+    if (window.ResizeObserver) {
+      new ResizeObserver(() => { map.invalidateSize(); }).observe(mapEl);
+    }
+    window.addEventListener('resize', () => map.invalidateSize());
+    setTimeout(() => { map.invalidateSize(); fitToBounds(); }, 200);
   }
 
   // ── Render helpers ────────────────────────────
@@ -445,7 +459,7 @@
 
     let html = `<table><thead><tr>
       <th>#</th><th>Nr.</th><th>Name</th><th>Runden</th>
-      <th>km</th><th>Tempo</th><th>Station</th><th>Spende</th>
+      <th>km</th><th>Pace</th><th>Station</th><th>Spende</th>
     </tr></thead><tbody>`;
 
     rows.forEach((r, i) => {
@@ -501,7 +515,7 @@
 
   function runnerIcon(text) {
     return L.divIcon({
-      className: '',
+      className: 'runner-pin-marker',
       html: `<div class="runner-pin"><span>${text}</span></div>`,
       iconSize: [28, 28],
       iconAnchor: [14, 28],
@@ -510,12 +524,14 @@
   }
 
   // Show the current top 10 runners as pins at the station they last passed.
+  // Markers persist across refreshes and are repositioned with setLatLng so they
+  // glide to the new station (CSS transition) instead of blinking out and back.
   function renderRunnerPins(rows) {
     if (!map) return;
-    runnerMarkers.forEach(m => map.removeLayer(m));
-    runnerMarkers = [];
     const top = rows.slice(0, 10).filter(r => r.last_station_id && stationCoords[r.last_station_id]);
-    const seen = {};   // station id → how many pins already placed there
+    const seen = {};       // station id → how many pins already placed there
+    const stillHere = new Set();
+
     top.forEach((r, idx) => {
       const base = stationCoords[r.last_station_id];
       const k = seen[r.last_station_id] = (seen[r.last_station_id] || 0);
@@ -523,11 +539,27 @@
       // Fan multiple runners at one station around it so pins don't fully overlap.
       const ang = k * (Math.PI / 3);
       const rad = k === 0 ? 0 : 0.00016;
-      const m = L.marker([base[0] + rad * Math.cos(ang), base[1] + rad * Math.sin(ang)], {
-        icon: runnerIcon(initials(r.name)), zIndexOffset: 1000,
-      }).addTo(map)
-        .bindPopup(`<b>${r.name}</b><br>Platz ${idx + 1} · ${r.laps} Runden · S${r.last_station_id}`);
-      runnerMarkers.push(m);
+      const pos = [base[0] + rad * Math.cos(ang), base[1] + rad * Math.sin(ang)];
+      const popup = `<b>${r.name}</b><br>Platz ${idx + 1} · ${r.laps} Runden · S${r.last_station_id}`;
+
+      let m = runnerPins[r.bib_number];
+      if (m) {
+        m.setLatLng(pos);
+        m.setPopupContent(popup);
+      } else {
+        m = L.marker(pos, { icon: runnerIcon(initials(r.name)), zIndexOffset: 1000 })
+              .addTo(map).bindPopup(popup);
+        runnerPins[r.bib_number] = m;
+      }
+      stillHere.add(r.bib_number);
+    });
+
+    // Drop pins for runners that fell out of the top list.
+    Object.keys(runnerPins).forEach(bib => {
+      if (!stillHere.has(Number(bib))) {
+        map.removeLayer(runnerPins[bib]);
+        delete runnerPins[bib];
+      }
     });
   }
 

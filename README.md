@@ -1,6 +1,6 @@
 # Spendenlauf Tracker
 
-Backend server + live dashboard for BLE beacon-based lap counting at a school charity run.
+Backend server + live dashboard with admin panel for BLE beacon-based lap counting.
 
 ## What it does
 
@@ -15,22 +15,14 @@ pip install -r requirements.txt
 # 2. Start the server
 uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 
-# 3. Open the dashboard
-#    → http://localhost:8000
-
-# 4. In a second terminal, run the simulator
+# 3. In a second terminal, run the simulator (if necessary)
+# registers 20 fake runners and sends scan events at 10× real time. Dashboard updates every 3 seconds.
+# options:
+# python simulate.py --runners 10    # fewer runners
+# python simulate.py --speed 20      # 20× real time (faster)
+# python simulate.py --reset         # wipe all data before starting
+# python simulate.py --url http://192.168.1.50:8000   # remote server
 python simulate.py --reset
-```
-
-The simulator registers 20 fake runners and sends scan events at 10× real time. You'll see the dashboard update every 3 seconds.
-
-## Simulator options
-
-```bash
-python simulate.py --runners 10    # fewer runners
-python simulate.py --speed 20      # 20× real time (faster)
-python simulate.py --reset         # wipe all data before starting
-python simulate.py --url http://192.168.1.50:8000   # remote server
 ```
 
 ## API reference
@@ -49,7 +41,7 @@ POST /api/scan
 }
 ```
 
-Response tells you what happened:
+Response:
 
 ```json
 { "status": "ok", "event": "checkpoint", "laps": 1 }
@@ -62,18 +54,38 @@ Events: `started`, `checkpoint`, `lap_complete`, `checkpoint_skipped`, `lap_comp
 ```
 POST   /api/runners                 — register a runner
 GET    /api/runners                 — list all runners + progress
+PUT    /api/runners/{bib_number}    — edit a runner (admin only)
 DELETE /api/runners/{bib_number}    — remove a runner
 ```
 
-Register body:
+A runner is linked to its beacon through the **start number** (`bib_number`), so
+the matching beacon must be configured first (see below). Register body:
 
 ```json
 {
-  "name": "Lena Müller",
+  "vorname": "Lena",
+  "nachname": "Müller",
   "bib_number": 1,
-  "beacon_mac": "AA:BB:CC:DD:EE:01",
-  "donation_per_lap": 2.50
+  "donation_per_km": 2.50
 }
+```
+
+### Beacon configuration
+
+A beacon pairs a start number with the MAC address of its BLE tag. Scan events
+are matched to runners via this pairing (`beacon_mac` → `bib_number` → runner).
+
+```
+GET    /api/beacons                 — list beacons (+ whether assigned to a runner)
+POST   /api/beacons                 — pair a start number with a MAC
+PUT    /api/beacons/{bib_number}    — edit a pairing (admin only)
+DELETE /api/beacons/{bib_number}    — remove a pairing
+```
+
+Body:
+
+```json
+{ "bib_number": 1, "beacon_mac": "AA:BB:CC:DD:EE:01" }
 ```
 
 ### Dashboard data
@@ -103,40 +115,37 @@ locations and the planned running route. Both are set up in the admin area.
    ADMIN_PASSWORD=your-secret-password
    ```
 
-   `.env` is git-ignored and read automatically at startup.
-
 2. Open `http://localhost:8000/admin` and log in.
 
-3. In the editor:
+3. The admin area has three sub-tabs:
+
+   **Karten-Konfiguration** — the station/route map editor:
    - **Stations** — drag the numbered markers onto their real-world spots; rename them inline.
-   - **🛣️ Entlang Straßen** — auto-connects the stations into a lap that follows
+   - **Entlang Straßen** — auto-connects the stations into a lap that follows
      real footpaths (incl. trails / Feldwege, e.g. in the Englischer Garten),
      using the public FOSSGIS foot router. It also shows the **lap length** and
      the **distance between each pair of stations**.
-   - **Strecke planen** — toggle *Zeichnen* and click to add/adjust route points manually.
    - **Speichern** — saves station coordinates, the route, the measured distances,
      and the current map view.
 
+   **Läufer-Konfiguration** — add, edit and delete runners (Vorname, Nachname,
+   donation €/km). The start number is picked from a dropdown of configured
+   beacons, so each runner is tied to a beacon.
+
+   **Beacon-Konfiguration** — pair start numbers with beacon MAC addresses
+   (add / edit / delete). Configure beacons here before adding runners.
+
 The map then appears on the main dashboard for everyone, with live runner
-counts per station. The map is restricted to the Munich area and defaults to
-the Schyrenbad / Sachsenstraße in München-Au.
+counts per station. The map is restricted and defaults to the Munich area.
 
 ## Estimated pace
 
 Each runner's rough pace is estimated from the time between their station
 passes: distance covered (completed laps × measured lap length, plus progress
 within the current lap) ÷ elapsed time since their first scan. The leaderboard
-shows a **Tempo** column (min/km) per runner and the stats row shows the field's
-**Ø Tempo**. Distances use the measured route when a route has been drawn,
+shows a **Pace** column (min/km) per runner and the stats row shows the field's
+**Ø Pace**. Distances use the measured route when a route has been drawn,
 otherwise they fall back to the `LAP_DISTANCE_KM` constant.
-
-### Auth endpoints
-
-```
-POST /api/login        — { username, password } → sets session cookie
-POST /api/logout       — clears the session
-GET  /api/auth         — { authenticated: true|false }
-```
 
 ### Stations & route
 
@@ -169,7 +178,7 @@ The algorithm is lenient to handle real-world BLE flakiness:
 - Out-of-order scans (going backward) are ignored.
 - Per-station cooldown prevents the same runner being counted twice at one station within 3 minutes.
 
-## ESP32 firmware (next step)
+## ESP32 firmware needed
 
 The ESP32 stations need firmware that:
 
@@ -190,12 +199,12 @@ The ESP32 connects to a shared Wi-Fi network (phone hotspot or portable router) 
 
 ```
 spendenlauf/
-├── server.py           ← FastAPI backend (run this)
+├── server.py           ← FastAPI backend
 ├── static/
 │   ├── dashboard.html  ← live dashboard + map (served at /)
-│   └── admin.html      ← admin login + station/route editor (served at /admin)
+│   └── admin.html      ← admin login + map / runner / beacon config (served at /admin)
 ├── simulate.py         ← test data generator
-├── .env                ← admin credentials (git-ignored, copy from .env.example)
+├── .env                ← admin credentials (copy from .env.example)
 ├── .env.example        ← template for .env
 ├── requirements.txt    ← Python dependencies
 └── README.md           ← this file

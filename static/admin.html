@@ -18,11 +18,12 @@
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: var(--bg); color: var(--text); min-height: 100vh; line-height: 1.5;
+    display: flex; flex-direction: column;
   }
   header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 1rem 1.4rem; background: linear-gradient(135deg, #0d1a26, #132232);
-    border-bottom: 1px solid var(--border);
+    padding: 0.5rem 1.4rem; background: linear-gradient(135deg, #0d1a26, #132232);
+    border-bottom: 1px solid var(--border); flex: 0 0 auto;
   }
   header h1 { font-size: 1.3rem; font-weight: 800; }
   header h1 span { color: var(--accent); }
@@ -40,8 +41,21 @@
   button.active  { background: var(--accent-2); color: var(--bg); border-color: var(--accent-2); }
   button.danger  { color: var(--danger); }
 
+  .hidden { display: none !important; }
+
+  /* ── Sub-tabs ───────────────────────────────── */
+  #editor-view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .subtabs {
+    display: flex; gap: 0.4rem; padding: 0.6rem 1.4rem; flex: 0 0 auto;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+  }
+  .subtabs button { background: transparent; border-color: transparent; }
+  .subtabs button.active {
+    background: var(--accent-2); color: var(--bg); border-color: var(--accent-2);
+  }
+
   /* ── Login ──────────────────────────────────── */
-  .login-wrap { display: flex; align-items: center; justify-content: center; padding: 4rem 1rem; }
+  .login-wrap { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; padding: 4rem 1rem; }
   .login-card {
     background: var(--surface); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 2rem; width: 100%; max-width: 360px;
@@ -50,16 +64,19 @@
   .field { margin-bottom: 1rem; }
   .field label { display: block; font-size: 0.78rem; color: var(--text-dim);
                  text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.3rem; }
-  input[type=text], input[type=password] {
+  input[type=text], input[type=password], input[type=number] {
     width: 100%; padding: 0.6rem 0.7rem; border-radius: 8px;
     border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.95rem;
+  }
+  input:focus, select:focus {
+    outline: none; border-color: var(--accent-2);
   }
   .login-card button { width: 100%; margin-top: 0.5rem; }
   .error { color: var(--danger); font-size: 0.85rem; margin-top: 0.6rem; min-height: 1.2em; }
 
   /* ── Editor layout ──────────────────────────── */
-  .editor { display: grid; grid-template-columns: 320px 1fr; height: calc(100vh - 61px); }
-  @media (max-width: 700px) { .editor { grid-template-columns: 1fr; height: auto; } }
+  .editor { display: grid; grid-template-columns: 320px 1fr; flex: 1 1 auto; min-height: 0; }
+  @media (max-width: 700px) { .editor { grid-template-columns: 1fr; } }
   .sidebar { background: var(--surface); border-right: 1px solid var(--border);
              padding: 1.2rem; overflow-y: auto; }
   #map { height: 100%; min-height: 400px; }
@@ -102,11 +119,50 @@
     border: 2px solid #fff; font-weight: 700; font-size: 0.8rem;
     box-shadow: 0 1px 4px rgba(0,0,0,0.5);
   }
+
+  /* ── Runner config ──────────────────────────── */
+  #tab-runners, #tab-beacons { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 1.4rem; }
+  .runners-wrap { max-width: 1000px; margin: 0 auto; }
+  .runner-form, .beacon-form {
+    display: grid; gap: 0.6rem; align-items: end;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1rem;
+  }
+  .runner-form { grid-template-columns: 1fr 1fr 0.8fr 0.9fr auto; }
+  .beacon-form { grid-template-columns: 0.8fr 1.2fr auto; }
+  @media (max-width: 800px) {
+    .runner-form, .beacon-form { grid-template-columns: 1fr 1fr; }
+  }
+  .runner-form .field, .beacon-form .field { margin: 0; }
+  .runner-form input, .runner-form select,
+  .beacon-form input { font-size: 0.9rem; }
+  .runner-form select {
+    width: 100%; padding: 0.6rem 0.7rem; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  }
+  .runner-form button, .beacon-form button { white-space: nowrap; }
+
+  .runners-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  .runners-table th {
+    text-align: left; font-size: 0.68rem; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-dim); font-weight: 600;
+    padding: 0.5rem 0.4rem; border-bottom: 1px solid var(--border);
+  }
+  .runners-table td { padding: 0.4rem; border-bottom: 1px solid var(--border); }
+  .runners-table input, .runners-table select {
+    width: 100%; padding: 0.4rem 0.5rem; font-size: 0.85rem;
+    border-radius: 8px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text);
+  }
+  .runners-table .laps-col { color: var(--text-dim); font-variant-numeric: tabular-nums; text-align: center; }
+  .runners-table .actions { display: flex; gap: 0.4rem; }
+  .runners-table .actions button { padding: 0.4rem 0.6rem; }
+  .empty-runners { padding: 2rem 1rem; text-align: center; color: var(--text-dim); }
 </style>
 </head>
 <body>
   <header>
-    <h1>🏃 Spenden<span>lauf</span> — Admin</h1>
+    <h1>Spenden<span>lauf</span> — Admin</h1>
     <div>
       <a href="/">← Dashboard</a>
       <button id="logout-btn" class="danger" style="display:none; margin-left:1rem;">Abmelden</button>
@@ -131,7 +187,15 @@
   </div>
 
   <!-- Editor -->
-  <div class="editor" id="editor-view" style="display:none;">
+  <div id="editor-view" style="display:none;">
+    <nav class="subtabs">
+      <button id="tab-btn-map" class="active" data-tab="map">Karten-Konfiguration</button>
+      <button id="tab-btn-runners" data-tab="runners">Läufer-Konfiguration</button>
+      <button id="tab-btn-beacons" data-tab="beacons">Beacon-Konfiguration</button>
+    </nav>
+
+    <!-- Map config -->
+    <div class="editor" id="tab-map">
     <div class="sidebar">
       <div class="section-title">Stationen</div>
       <div class="hint">Ziehe die nummerierten Marker auf der Karte an ihren Standort. Namen können hier geändert werden.</div>
@@ -140,18 +204,73 @@
       <div class="section-title">Strecke planen</div>
       <div class="hint">„Entlang Straßen“ verbindet die Stationen automatisch zu einer Runde, die den echten Wegen folgt.</div>
       <div class="btn-row">
-        <button id="road-btn" class="primary">🛣️ Entlang Straßen</button>
+        <button id="road-btn" class="primary">Entlang Straßen</button>
         <button id="clear-btn" class="danger">Löschen</button>
       </div>
 
       <div id="route-info"></div>
 
       <div class="save-bar">
-        <button id="save-btn" class="primary">💾 Speichern</button>
+        <button id="save-btn" class="primary">Speichern</button>
         <div class="status" id="status"></div>
       </div>
     </div>
     <div id="map"></div>
+    </div>
+
+    <!-- Runner config -->
+    <div id="tab-runners" class="hidden">
+      <div class="runners-wrap">
+        <div class="section-title">Läufer hinzufügen</div>
+        <form class="runner-form" id="runner-form">
+          <div class="field">
+            <label for="rf-vorname">Vorname</label>
+            <input type="text" id="rf-vorname" required>
+          </div>
+          <div class="field">
+            <label for="rf-nachname">Nachname</label>
+            <input type="text" id="rf-nachname" required>
+          </div>
+          <div class="field">
+            <label for="rf-bib">Startnummer</label>
+            <select id="rf-bib" required></select>
+          </div>
+          <div class="field">
+            <label for="rf-don">Spende €/km</label>
+            <input type="text" id="rf-don" inputmode="decimal" value="0">
+          </div>
+          <button type="submit" class="primary">+ Hinzufügen</button>
+        </form>
+        <div class="hint" id="runner-form-hint"></div>
+        <div class="status" id="runner-form-status"></div>
+
+        <div class="section-title">Läufer (<span id="runner-count">0</span>)</div>
+        <div id="runners-list"></div>
+      </div>
+    </div>
+
+    <!-- Beacon config -->
+    <div id="tab-beacons" class="hidden">
+      <div class="runners-wrap">
+        <div class="section-title">Beacon hinzufügen</div>
+        <div class="hint">Verknüpfe eine Startnummer mit der MAC-Adresse ihres BLE-Beacons.</div>
+        <form class="beacon-form" id="beacon-form">
+          <div class="field">
+            <label for="bf-bib">Startnummer</label>
+            <input type="number" id="bf-bib" min="1" required>
+          </div>
+          <div class="field">
+            <label for="bf-mac">Beacon-MAC</label>
+            <input type="text" id="bf-mac" placeholder="AA:BB:CC:DD:EE:01" required>
+          </div>
+          <button type="submit" class="primary">+ Hinzufügen</button>
+        </form>
+        <div class="status" id="beacon-form-status"></div>
+
+        <div class="section-title">Beacons (<span id="beacon-count">0</span>)</div>
+        <div id="beacons-list"></div>
+      </div>
+    </div>
   </div>
 
 <script>
@@ -196,9 +315,10 @@
 
   async function showEditor() {
     loginView.style.display = 'none';
-    editorView.style.display = 'grid';
+    editorView.style.display = 'flex';
     logoutBtn.style.display = 'inline-block';
     await buildEditor();
+    loadRunners();
   }
 
   document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -419,6 +539,262 @@
       status.textContent = 'Fehler beim Speichern.';
     }
   });
+
+  // ── Sub-tabs ──────────────────────────────────
+  const TABS = {
+    map:     { panel: 'tab-map',     btn: 'tab-btn-map' },
+    runners: { panel: 'tab-runners', btn: 'tab-btn-runners' },
+    beacons: { panel: 'tab-beacons', btn: 'tab-btn-beacons' },
+  };
+
+  function selectTab(tab) {
+    Object.entries(TABS).forEach(([name, t]) => {
+      const active = name === tab;
+      document.getElementById(t.panel).classList.toggle('hidden', !active);
+      document.getElementById(t.btn).classList.toggle('active', active);
+    });
+    // Leaflet needs a nudge once its container becomes visible again.
+    if (tab === 'map' && map) setTimeout(() => map.invalidateSize(), 0);
+    if (tab === 'runners') loadRunners();
+    if (tab === 'beacons') loadBeacons();
+  }
+  Object.entries(TABS).forEach(([name, t]) =>
+    document.getElementById(t.btn).addEventListener('click', () => selectTab(name)));
+
+  // ── Shared helpers ────────────────────────────
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/"/g, '&quot;');
+  }
+  function parseAmount(v) {
+    const n = parseFloat(String(v).replace(',', '.'));
+    return isNaN(n) ? 0 : n;
+  }
+
+  let beaconsData = [];   // [{bib_number, beacon_mac, assigned}]
+
+  // <option> list of start numbers: free beacons, plus `keepBib` if given so an
+  // existing runner keeps showing its own (already-assigned) number.
+  function bibOptions(selectedBib, keepBib) {
+    const avail = beaconsData.filter(b => !b.assigned || b.bib_number === keepBib);
+    if (!avail.length) return '<option value="">— keine freien Beacons —</option>';
+    return avail.map(b =>
+      `<option value="${b.bib_number}" ${b.bib_number === selectedBib ? 'selected' : ''}>` +
+      `#${b.bib_number} (${esc(b.beacon_mac)})</option>`).join('');
+  }
+
+  // ── Runner management ─────────────────────────
+  function runnerStatus(msg, ok) {
+    const el = document.getElementById('runner-form-status');
+    el.className = 'status ' + (ok ? 'ok' : 'err');
+    el.textContent = msg;
+  }
+
+  async function loadRunners() {
+    const [runners, beacons] = await Promise.all([
+      fetch(`${API}/api/runners`).then(r => r.json()),
+      fetch(`${API}/api/beacons`).then(r => r.json()),
+    ]);
+    beaconsData = beacons;
+
+    // Add-form start-number dropdown shows only unassigned beacons.
+    const free = beacons.filter(b => !b.assigned);
+    const sel = document.getElementById('rf-bib');
+    sel.innerHTML = free.length
+      ? free.map(b => `<option value="${b.bib_number}">#${b.bib_number} (${esc(b.beacon_mac)})</option>`).join('')
+      : '<option value="">— keine freien Beacons —</option>';
+    document.getElementById('runner-form-hint').textContent = free.length
+      ? '' : 'Lege zuerst Beacons in der Beacon-Konfiguration an.';
+
+    const list = document.getElementById('runners-list');
+    document.getElementById('runner-count').textContent = runners.length;
+    if (!runners.length) {
+      list.innerHTML = '<div class="empty-runners">Noch keine Läufer angelegt.</div>';
+      return;
+    }
+    let html = `<table class="runners-table"><thead><tr>
+      <th>Vorname</th><th>Nachname</th><th>Startnummer</th><th>€/km</th><th></th>
+    </tr></thead><tbody>`;
+    runners.forEach(r => {
+      html += `<tr data-bib="${r.bib_number}">
+        <td><input type="text" class="e-vorname"  value="${esc(r.vorname)}"></td>
+        <td><input type="text" class="e-nachname" value="${esc(r.nachname)}"></td>
+        <td><select class="e-bib">${bibOptions(r.bib_number, r.bib_number)}</select></td>
+        <td><input type="text" class="e-don" inputmode="decimal" value="${esc(r.donation_per_km)}"></td>
+        <td><div class="actions">
+          <button class="save-runner primary">Speichern</button>
+          <button class="del-runner danger">Löschen</button>
+        </div></td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+    list.innerHTML = html;
+
+    list.querySelectorAll('.save-runner').forEach(b =>
+      b.addEventListener('click', saveRunnerRow));
+    list.querySelectorAll('.del-runner').forEach(b =>
+      b.addEventListener('click', deleteRunnerRow));
+  }
+
+  document.getElementById('runner-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const bib = Number(document.getElementById('rf-bib').value);
+    if (!bib) { runnerStatus('Keine freie Startnummer — lege zuerst einen Beacon an.', false); return; }
+    const payload = {
+      vorname:         document.getElementById('rf-vorname').value.trim(),
+      nachname:        document.getElementById('rf-nachname').value.trim(),
+      bib_number:      bib,
+      donation_per_km: parseAmount(document.getElementById('rf-don').value),
+    };
+    const res = await fetch(`${API}/api/runners`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      runnerStatus(`✔ ${payload.vorname} ${payload.nachname} hinzugefügt.`, true);
+      e.target.reset();
+      document.getElementById('rf-don').value = '0';
+      loadRunners();
+    } else {
+      const d = await res.json().catch(() => ({}));
+      runnerStatus(`Fehler: ${d.detail || 'Hinzufügen fehlgeschlagen (Startnummer evtl. vergeben).'}`, false);
+    }
+  });
+
+  async function saveRunnerRow(e) {
+    const row = e.target.closest('tr');
+    const bib = row.dataset.bib;
+    const payload = {
+      vorname:         row.querySelector('.e-vorname').value.trim(),
+      nachname:        row.querySelector('.e-nachname').value.trim(),
+      bib_number:      Number(row.querySelector('.e-bib').value),
+      donation_per_km: parseAmount(row.querySelector('.e-don').value),
+    };
+    const res = await fetch(`${API}/api/runners/${bib}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      runnerStatus(`✔ Läufer #${payload.bib_number} gespeichert.`, true);
+      loadRunners();
+    } else if (res.status === 401) {
+      runnerStatus('Sitzung abgelaufen — bitte neu anmelden.', false);
+      setTimeout(() => location.reload(), 1500);
+    } else {
+      const d = await res.json().catch(() => ({}));
+      runnerStatus(`Fehler: ${d.detail || 'Speichern fehlgeschlagen.'}`, false);
+    }
+  }
+
+  async function deleteRunnerRow(e) {
+    const row = e.target.closest('tr');
+    const bib = row.dataset.bib;
+    const name = `${row.querySelector('.e-vorname').value} ${row.querySelector('.e-nachname').value}`.trim();
+    if (!confirm(`Läufer #${bib} (${name}) wirklich löschen?`)) return;
+    const res = await fetch(`${API}/api/runners/${bib}`, { method: 'DELETE' });
+    if (res.ok) {
+      runnerStatus(`✔ Läufer #${bib} gelöscht.`, true);
+      loadRunners();
+    } else {
+      const d = await res.json().catch(() => ({}));
+      runnerStatus(`Fehler: ${d.detail || 'Löschen fehlgeschlagen.'}`, false);
+    }
+  }
+
+  // ── Beacon management ─────────────────────────
+  function beaconStatus(msg, ok) {
+    const el = document.getElementById('beacon-form-status');
+    el.className = 'status ' + (ok ? 'ok' : 'err');
+    el.textContent = msg;
+  }
+
+  async function loadBeacons() {
+    const beacons = await fetch(`${API}/api/beacons`).then(r => r.json());
+    beaconsData = beacons;
+    const list = document.getElementById('beacons-list');
+    document.getElementById('beacon-count').textContent = beacons.length;
+    if (!beacons.length) {
+      list.innerHTML = '<div class="empty-runners">Noch keine Beacons angelegt.</div>';
+      return;
+    }
+    let html = `<table class="runners-table"><thead><tr>
+      <th>Startnummer</th><th>Beacon-MAC</th><th>Status</th><th></th>
+    </tr></thead><tbody>`;
+    beacons.forEach(b => {
+      html += `<tr data-bib="${b.bib_number}">
+        <td><input type="number" class="e-bbib" min="1" value="${esc(b.bib_number)}"></td>
+        <td><input type="text" class="e-bmac" value="${esc(b.beacon_mac)}"></td>
+        <td class="laps-col">${b.assigned ? 'belegt' : 'frei'}</td>
+        <td><div class="actions">
+          <button class="save-beacon primary">Speichern</button>
+          <button class="del-beacon danger">Löschen</button>
+        </div></td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+    list.innerHTML = html;
+
+    list.querySelectorAll('.save-beacon').forEach(b =>
+      b.addEventListener('click', saveBeaconRow));
+    list.querySelectorAll('.del-beacon').forEach(b =>
+      b.addEventListener('click', deleteBeaconRow));
+  }
+
+  document.getElementById('beacon-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const payload = {
+      bib_number: Number(document.getElementById('bf-bib').value),
+      beacon_mac: document.getElementById('bf-mac').value.trim(),
+    };
+    const res = await fetch(`${API}/api/beacons`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      beaconStatus(`✔ Beacon #${payload.bib_number} hinzugefügt.`, true);
+      e.target.reset();
+      loadBeacons();
+    } else {
+      const d = await res.json().catch(() => ({}));
+      beaconStatus(`Fehler: ${d.detail || 'Hinzufügen fehlgeschlagen (Nr./MAC evtl. vergeben).'}`, false);
+    }
+  });
+
+  async function saveBeaconRow(e) {
+    const row = e.target.closest('tr');
+    const bib = row.dataset.bib;
+    const payload = {
+      bib_number: Number(row.querySelector('.e-bbib').value),
+      beacon_mac: row.querySelector('.e-bmac').value.trim(),
+    };
+    const res = await fetch(`${API}/api/beacons/${bib}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      beaconStatus(`✔ Beacon #${payload.bib_number} gespeichert.`, true);
+      loadBeacons();
+    } else if (res.status === 401) {
+      beaconStatus('Sitzung abgelaufen — bitte neu anmelden.', false);
+      setTimeout(() => location.reload(), 1500);
+    } else {
+      const d = await res.json().catch(() => ({}));
+      beaconStatus(`Fehler: ${d.detail || 'Speichern fehlgeschlagen.'}`, false);
+    }
+  }
+
+  async function deleteBeaconRow(e) {
+    const row = e.target.closest('tr');
+    const bib = row.dataset.bib;
+    if (!confirm(`Beacon #${bib} wirklich löschen?`)) return;
+    const res = await fetch(`${API}/api/beacons/${bib}`, { method: 'DELETE' });
+    if (res.ok) {
+      beaconStatus(`✔ Beacon #${bib} gelöscht.`, true);
+      loadBeacons();
+    } else {
+      const d = await res.json().catch(() => ({}));
+      beaconStatus(`Fehler: ${d.detail || 'Löschen fehlgeschlagen.'}`, false);
+    }
+  }
 
   checkAuth();
 </script>

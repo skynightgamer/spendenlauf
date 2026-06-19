@@ -49,28 +49,39 @@ def register_runners(base_url: str, n: int):
     used_names = set()
 
     for i in range(n):
-        # Pick a unique name
+        # Pick a unique first/last name combination
         while True:
-            name = f"{random.choice(FIRST_NAMES)} {random.choice(LAST_NAMES)}"
+            vorname  = random.choice(FIRST_NAMES)
+            nachname = random.choice(LAST_NAMES)
+            name = f"{vorname} {nachname}"
             if name not in used_names:
                 used_names.add(name)
                 break
 
+        bib = i + 1
+        beacon_mac = mac(bib)
+
+        # 1. Pair the start number with a beacon MAC.
+        requests.post(f"{base_url}/api/beacons",
+                      json={"bib_number": bib, "beacon_mac": beacon_mac})
+
+        # 2. Register the runner against that start number.
         runner = {
-            "name": name,
-            "bib_number": i + 1,
-            "beacon_mac": mac(i + 1),
-            "donation_per_lap": round(random.uniform(0.5, 5.0), 2),
+            "vorname": vorname,
+            "nachname": nachname,
+            "bib_number": bib,
+            "donation_per_km": round(random.uniform(0.5, 5.0), 2),
         }
+        runner["beacon_mac"] = beacon_mac  # kept locally for the scan loop
 
         resp = requests.post(f"{base_url}/api/runners", json=runner)
         if resp.status_code == 200:
-            print(f"   ✔ #{runner['bib_number']:>2}  {runner['name']:<22} "
-                  f"€{runner['donation_per_lap']:.2f}/lap  [{runner['beacon_mac']}]")
+            print(f"   ✔ #{bib:>2}  {name:<22} "
+                  f"€{runner['donation_per_km']:.2f}/km  [{beacon_mac}]")
         elif resp.status_code == 409:
-            print(f"   ⚠ #{runner['bib_number']} already exists, skipping")
+            print(f"   ⚠ #{bib} already exists, skipping")
         else:
-            print(f"   ✘ #{runner['bib_number']} failed: {resp.text}")
+            print(f"   ✘ #{bib} failed: {resp.text}")
 
         runners.append(runner)
 
@@ -120,7 +131,7 @@ def simulate(base_url: str, runners: list, speed: float):
                     result = resp.json()
 
                     bib  = s["runner"]["bib_number"]
-                    name = s["runner"]["name"]
+                    name = f"{s['runner']['vorname']} {s['runner']['nachname']}"
                     cp   = s["next_cp"]
                     evt  = result.get("event", "?")
 

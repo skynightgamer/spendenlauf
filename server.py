@@ -89,10 +89,18 @@ def init_db():
     c.execute("""
         CREATE TABLE IF NOT EXISTS runners (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            name            TEXT    NOT NULL,
+            vorname         TEXT    NOT NULL,
+            nachname        TEXT    NOT NULL,
             bib_number      INTEGER UNIQUE NOT NULL,
-            beacon_mac      TEXT    UNIQUE NOT NULL,
-            donation_per_lap REAL   DEFAULT 0.0
+            donation_per_km REAL    DEFAULT 0.0
+        )
+    """)
+
+    # Beacon hardware: pairs a start number (bib) with a BLE MAC address.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS beacons (
+            bib_number  INTEGER PRIMARY KEY,
+            beacon_mac  TEXT UNIQUE NOT NULL
         )
     """)
 
@@ -211,14 +219,24 @@ class ScanEvent(BaseModel):
     rssi:       int                # e.g. -65
 
 class RunnerCreate(BaseModel):
-    name:             str
-    bib_number:       int
-    beacon_mac:       str
-    donation_per_lap: float = 0.0
+    vorname:         str
+    nachname:        str
+    bib_number:      int
+    donation_per_km: float = 0.0
 
 class RunnerUpdate(BaseModel):
-    name:             Optional[str]   = None
-    donation_per_lap: Optional[float] = None
+    vorname:         Optional[str]   = None
+    nachname:        Optional[str]   = None
+    bib_number:      Optional[int]   = None
+    donation_per_km: Optional[float] = None
+
+class BeaconCreate(BaseModel):
+    bib_number: int
+    beacon_mac: str
+
+class BeaconUpdate(BaseModel):
+    bib_number: Optional[int] = None
+    beacon_mac: Optional[str] = None
 
 class AdminLogin(BaseModel):
     username: str
@@ -344,8 +362,13 @@ def ingest_scan(scan: ScanEvent):
         (scan.station_id, mac, scan.timestamp, scan.rssi),
     )
 
-    # 2. Identify runner
-    c.execute("SELECT id FROM runners WHERE beacon_mac = ?", (mac,))
+    # 2. Identify runner (beacon MAC → bib number → runner)
+    c.execute(
+        "SELECT r.id FROM runners r "
+        "JOIN beacons b ON r.bib_number = b.bib_number "
+        "WHERE b.beacon_mac = ?",
+        (mac,),
+    )
     row = c.fetchone()
     if not row:
         conn.commit(); conn.close()
@@ -439,10 +462,11 @@ def add_runner(runner: RunnerCreate):
     try:
         c = conn.cursor()
         c.execute(
-            "INSERT INTO runners (name, bib_number, beacon_mac, donation_per_lap) "
+            "INSERT INTO runners "
+            "(vorname, nachname, bib_number, donation_per_km) "
             "VALUES (?, ?, ?, ?)",
-            (runner.name, runner.bib_number,
-             runner.beacon_mac.upper(), runner.donation_per_lap),
+            (runner.vorname.strip(), runner.nachname.strip(),
+             runner.bib_number, runner.donation_per_km),
         )
         conn.commit()
         rid = c.lastrowid
@@ -457,7 +481,7 @@ def add_runner(runner: RunnerCreate):
 def list_runners():
     conn = get_db()
     rows = conn.execute("""
-        SELECT r.id, r.name, r.bib_number, r.beacon_mac, r.donation_per_lap,
+        SELECT r.id, r.vorname, r.nachname, r.bib_number, r.donation_per_km,
                COALESCE(p.laps_completed, 0) AS laps,
                p.last_station_id, p.last_seen_time, p.next_checkpoint
         FROM runners r
@@ -465,7 +489,41 @@ def list_runners():
         ORDER BY laps DESC, r.bib_number ASC
     """).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["name"] = f"{d['vorname']} {d['nachname']}".strip()
+        out.append(d)
+    return out
+
+
+@app.put("/api/runners/{bib_number}")
+def update_runner(bib_number: int, runner: RunnerUpdate,
+                  _: bool = Depends(require_admin)):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT id FROM runners WHERE bib_number = ?", (bib_number,))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(404, detail="Runner not found")
+    try:
+        c.execute(
+            "UPDATE runners SET "
+            "vorname = COALESCE(?, vorname), "
+            "nachname = COALESCE(?, nachname), "
+            "bib_number = COALESCE(?, bib_number), "
+            "donation_per_km = COALESCE(?, donation_per_km) "
+            "WHERE id = ?",
+            (runner.vorname, runner.nachname, runner.bib_number,
+             runner.donation_per_km, row["id"]),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError as e:
+        raise HTTPException(409, detail=str(e))
+    finally:
+        conn.close()
+    return {"status": "ok"}
 
 
 @app.delete("/api/runners/{bib_number}")
@@ -481,6 +539,77 @@ def delete_runner(bib_number: int):
     c.execute("DELETE FROM cooldown_tracker WHERE runner_id = ?", (rid,))
     c.execute("DELETE FROM runner_progress  WHERE runner_id = ?", (rid,))
     c.execute("DELETE FROM runners          WHERE id = ?",        (rid,))
+    conn.commit(); conn.close()
+    return {"status": "ok"}
+
+
+# ── Beacon configuration ──────────────────────────────────────
+
+@app.get("/api/beacons")
+def list_beacons():
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT b.bib_number, b.beacon_mac, "
+        "       (r.id IS NOT NULL) AS assigned "
+        "FROM beacons b "
+        "LEFT JOIN runners r ON r.bib_number = b.bib_number "
+        "ORDER BY b.bib_number ASC"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/beacons")
+def add_beacon(beacon: BeaconCreate):
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO beacons (bib_number, beacon_mac) VALUES (?, ?)",
+            (beacon.bib_number, beacon.beacon_mac.upper()),
+        )
+        conn.commit()
+        return {"status": "ok"}
+    except sqlite3.IntegrityError as e:
+        raise HTTPException(409, detail=str(e))
+    finally:
+        conn.close()
+
+
+@app.put("/api/beacons/{bib_number}")
+def update_beacon(bib_number: int, beacon: BeaconUpdate,
+                  _: bool = Depends(require_admin)):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT bib_number FROM beacons WHERE bib_number = ?", (bib_number,))
+    if not c.fetchone():
+        conn.close()
+        raise HTTPException(404, detail="Beacon not found")
+    mac = beacon.beacon_mac.upper() if beacon.beacon_mac is not None else None
+    try:
+        c.execute(
+            "UPDATE beacons SET "
+            "bib_number = COALESCE(?, bib_number), "
+            "beacon_mac = COALESCE(?, beacon_mac) "
+            "WHERE bib_number = ?",
+            (beacon.bib_number, mac, bib_number),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError as e:
+        raise HTTPException(409, detail=str(e))
+    finally:
+        conn.close()
+    return {"status": "ok"}
+
+
+@app.delete("/api/beacons/{bib_number}")
+def delete_beacon(bib_number: int):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT bib_number FROM beacons WHERE bib_number = ?", (bib_number,))
+    if not c.fetchone():
+        conn.close()
+        raise HTTPException(404, detail="Beacon not found")
+    c.execute("DELETE FROM beacons WHERE bib_number = ?", (bib_number,))
     conn.commit(); conn.close()
     return {"status": "ok"}
 
@@ -535,12 +664,13 @@ def estimate_pace(laps, last_station_id, start_iso, last_iso, lap_m, cum):
 def leaderboard():
     conn = get_db()
     rows = conn.execute("""
-        SELECT r.name, r.bib_number, r.donation_per_lap,
+        SELECT r.vorname, r.nachname, r.bib_number, r.donation_per_km,
                COALESCE(p.laps_completed, 0) AS laps,
                p.last_station_id, p.last_seen_time,
                (SELECT MIN(timestamp) FROM scan_events e
-                 WHERE e.beacon_mac = r.beacon_mac) AS start_time
+                 WHERE e.beacon_mac = b.beacon_mac) AS start_time
         FROM runners r
+        LEFT JOIN beacons b ON r.bib_number = b.bib_number
         LEFT JOIN runner_progress p ON r.id = p.runner_id
         ORDER BY laps DESC, r.bib_number ASC
     """).fetchall()
@@ -550,17 +680,18 @@ def leaderboard():
     out = []
     for r in rows:
         laps = r["laps"]
-        dist_m = laps * lap_m + cum.get(r["last_station_id"], 0.0)
+        dist_m  = laps * lap_m + cum.get(r["last_station_id"], 0.0)
+        dist_km = dist_m / 1000
         pace, speed = estimate_pace(
             laps, r["last_station_id"], r["start_time"], r["last_seen_time"],
             lap_m, cum)
         out.append({
-            "name":             r["name"],
+            "name":             f"{r['vorname']} {r['nachname']}".strip(),
             "bib_number":       r["bib_number"],
-            "donation_per_lap": r["donation_per_lap"],
+            "donation_per_km":  r["donation_per_km"],
             "laps":             laps,
-            "distance_km":      round(dist_m / 1000, 2),
-            "donations":        round(laps * r["donation_per_lap"], 2),
+            "distance_km":      round(dist_km, 2),
+            "donations":        round(dist_km * r["donation_per_km"], 2),
             "last_station_id":  r["last_station_id"],
             "last_seen_time":   r["last_seen_time"],
             "pace_min_km":      pace,
@@ -579,17 +710,16 @@ def stats():
     total_laps = c.execute(
         "SELECT COALESCE(SUM(laps_completed),0) FROM runner_progress"
     ).fetchone()[0]
-    total_donations = c.execute(
-        "SELECT COALESCE(SUM(p.laps_completed * r.donation_per_lap),0) "
-        "FROM runner_progress p JOIN runners r ON p.runner_id = r.id"
-    ).fetchone()[0]
     active = c.execute(
         "SELECT COUNT(*) FROM runner_progress WHERE last_station_id IS NOT NULL"
     ).fetchone()[0]
     conn.close()
 
-    # Average pace across all runners (reuse the leaderboard computation).
-    paces = [r["pace_min_km"] for r in leaderboard() if r["pace_min_km"]]
+    # Donations are now distance-based, so derive them (and the average pace)
+    # from the leaderboard, which already computes per-runner distance.
+    lb = leaderboard()
+    total_donations = sum(r["donations"] for r in lb)
+    paces = [r["pace_min_km"] for r in lb if r["pace_min_km"]]
     avg_pace = round(sum(paces) / len(paces), 2) if paces else None
 
     _, lap_m, _ = get_course_distances()
@@ -610,7 +740,7 @@ def stats():
 def reset_all():
     """Wipe all data — useful during testing."""
     conn = get_db()
-    for t in ("scan_events", "cooldown_tracker", "runner_progress", "runners"):
+    for t in ("scan_events", "cooldown_tracker", "runner_progress", "runners", "beacons"):
         conn.execute(f"DELETE FROM {t}")
     conn.commit(); conn.close()
     return {"status": "ok", "message": "All data cleared"}
