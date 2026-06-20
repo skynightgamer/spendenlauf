@@ -840,10 +840,12 @@ def stats():
     ).fetchone()[0]
     conn.close()
 
-    # Donations are distance-based, derive them (and the average pace)
-    # from leaderboard (already computes per-runner distance)
+    # Donations and total distance are distance-based, derive them (and the
+    # average pace) from leaderboard, whose per-runner distance already counts
+    # progress between stations — not just completed laps.
     lb = leaderboard()
     total_donations = sum(r["donations"] for r in lb)
+    total_distance_km = sum(r["distance_km"] for r in lb)
     paces = [r["pace_min_km"] for r in lb if r["pace_min_km"]]
     avg_pace = round(sum(paces) / len(paces), 2) if paces else None
 
@@ -852,7 +854,7 @@ def stats():
         "total_runners":     total_runners,
         "active_runners":    active,
         "total_laps":        total_laps,
-        "total_distance_km": round(total_laps * lap_m / 1000, 1),
+        "total_distance_km": round(total_distance_km, 1),
         "total_donations":   round(total_donations, 2),
         "lap_distance_km":   round(lap_m / 1000, 2),
         "avg_pace_min_km":   avg_pace,
