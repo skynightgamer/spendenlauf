@@ -1,29 +1,16 @@
-"""
-Spendenlauf Tracker — Backend Server
-=====================================
-FastAPI server that ingests BLE scan events from ESP32 stations,
-reconstructs laps from sequential checkpoint passes, and serves
-a live dashboard plus JSON APIs.
-
-Run:  uvicorn server:app --host 0.0.0.0 --port 8000 --reload
-"""
-
 from fastapi import FastAPI, HTTPException, Response, Cookie, Depends
 from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 import sqlite3
 import os
 import json
 import secrets
-from datetime import datetime, timedelta
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-
-# ── .env loader (tiny, dependency-free) ────────────────────────
-
+# .env loader
 def load_env():
     """Read key=value pairs from a sibling .env file into os.environ."""
     env_path = Path(__file__).parent / ".env"
@@ -39,7 +26,6 @@ def load_env():
 load_env()
 
 # ── Configuration ──────────────────────────────────────────────
-
 CHECKPOINT_COUNT = 5          # Stations around the loop
 COOLDOWN_SECONDS = 180        # 3 min per-station cooldown
 LAP_DISTANCE_KM  = 2.0        # Loop length in km
@@ -48,9 +34,9 @@ DATABASE          = "spendenlauf.db"
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 SESSION_TTL    = timedelta(hours=12)
+COOKIE_SECURE  = os.environ.get("COOKIE_SECURE", "true").strip().lower() != "false"
 
-# Default station placement: a loop around the Schyrenbad / Sachsenstraße,
-# München-Au. Admin can drag these to their exact spots on the map.
+# Default station placement: a loop around the Schyrenbad / Sachsenstraße, München-Au.
 DEFAULT_STATIONS = [
     (1, "Station 1", 48.11680, 11.57930),
     (2, "Station 2", 48.11620, 11.58150),
@@ -62,19 +48,25 @@ DEFAULT_STATIONS = [
 # In-memory session store: token → expiry. Cleared on server restart.
 SESSIONS: dict[str, datetime] = {}
 
-# ── App setup ──────────────────────────────────────────────────
+# App setup
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup/shutdown hook"""
+    init_db()
+    print("✔ Database initialised")
+    print("✔ Dashboard at http://localhost:8000")
+    yield
 
-app = FastAPI(title="Spendenlauf Tracker")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+# Interactive API docs are disabled in production. re-enable by passing docs_url="/docs"
+app = FastAPI(
+    title="Spendenlauf Tracker",
+    docs_url=None, redoc_url=None, openapi_url=None,
+    lifespan=lifespan,
 )
+# Dashboard, admin panel and ESP32 stations all talk to this server directly
+# (same-origin or non-browser clients), so no cross-origin access needed.
 
-# ── Database helpers ───────────────────────────────────────────
-
+# Database helpers
 def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DATABASE)
     conn.row_factory = sqlite3.Row
@@ -96,7 +88,6 @@ def init_db():
         )
     """)
 
-    # Beacon hardware: pairs a start number (bib) with a BLE MAC address.
     c.execute("""
         CREATE TABLE IF NOT EXISTS beacons (
             bib_number  INTEGER PRIMARY KEY,
@@ -134,7 +125,6 @@ def init_db():
         )
     """)
 
-    # Physical location of each station (set by admin on the map).
     c.execute("""
         CREATE TABLE IF NOT EXISTS stations (
             id        INTEGER PRIMARY KEY,
@@ -144,7 +134,6 @@ def init_db():
         )
     """)
 
-    # Generic key/value store (route polyline, saved map view, …).
     c.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
@@ -164,8 +153,7 @@ def init_db():
     conn.close()
 
 
-# ── Settings helpers ───────────────────────────────────────────
-
+# Settings helpers
 def get_setting(key: str, default=None):
     conn = get_db()
     row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
@@ -183,13 +171,11 @@ def set_setting(key: str, value) -> None:
     conn.close()
 
 
-# ── Admin authentication (cookie session) ──────────────────────
-
+# Admin authentication (cookie session)
 def create_session() -> str:
     token = secrets.token_urlsafe(32)
-    SESSIONS[token] = datetime.utcnow() + SESSION_TTL
+    SESSIONS[token] = datetime.now(timezone.utc) + SESSION_TTL
     return token
-
 
 def session_valid(token: Optional[str]) -> bool:
     if not token:
@@ -197,21 +183,18 @@ def session_valid(token: Optional[str]) -> bool:
     expiry = SESSIONS.get(token)
     if not expiry:
         return False
-    if datetime.utcnow() > expiry:
+    if datetime.now(timezone.utc) > expiry:
         SESSIONS.pop(token, None)
         return False
     return True
 
-
 def require_admin(session: Optional[str] = Cookie(default=None)) -> bool:
-    """FastAPI dependency that rejects unauthenticated requests."""
     if not session_valid(session):
         raise HTTPException(401, detail="Not authenticated")
     return True
 
 
-# ── Pydantic models ───────────────────────────────────────────
-
+# Pydantic models
 class ScanEvent(BaseModel):
     station_id: int                # 1–5
     beacon_mac: str                # e.g. "AA:BB:CC:DD:EE:01"
@@ -255,8 +238,7 @@ class RouteUpdate(BaseModel):
     lap_distance_m: Optional[float]         = None  # full lap length in metres
 
 
-# ── Admin auth endpoints ───────────────────────────────────────
-
+# Admin auth endpoints
 @app.post("/api/login")
 def login(creds: AdminLogin, response: Response):
     if not ADMIN_PASSWORD:
@@ -270,7 +252,7 @@ def login(creds: AdminLogin, response: Response):
     token = create_session()
     response.set_cookie(
         "session", token,
-        httponly=True, samesite="lax",
+        httponly=True, samesite="strict", secure=COOKIE_SECURE,
         max_age=int(SESSION_TTL.total_seconds()),
     )
     return {"status": "ok"}
@@ -280,7 +262,9 @@ def login(creds: AdminLogin, response: Response):
 def logout(response: Response, session: Optional[str] = Cookie(default=None)):
     if session:
         SESSIONS.pop(session, None)
-    response.delete_cookie("session")
+    response.delete_cookie(
+        "session", httponly=True, samesite="strict", secure=COOKIE_SECURE,
+    )
     return {"status": "ok"}
 
 
@@ -289,8 +273,7 @@ def auth_status(session: Optional[str] = Cookie(default=None)):
     return {"authenticated": session_valid(session)}
 
 
-# ── Stations & route ───────────────────────────────────────────
-
+# Stations & route
 @app.get("/api/stations")
 def get_stations():
     conn = get_db()
@@ -337,8 +320,7 @@ def update_route(data: RouteUpdate, _: bool = Depends(require_admin)):
     return {"status": "ok"}
 
 
-# ── Scan ingestion + lap reconstruction ───────────────────────
-
+# Scan ingestion + lap reconstruction
 @app.post("/api/scan")
 def ingest_scan(scan: ScanEvent):
     """
@@ -355,14 +337,14 @@ def ingest_scan(scan: ScanEvent):
     c = conn.cursor()
     mac = scan.beacon_mac.upper()
 
-    # 1. Store raw event (useful for post-hoc analysis)
+    # store raw event (useful for post-hoc analysis)
     c.execute(
         "INSERT INTO scan_events (station_id, beacon_mac, timestamp, rssi) "
         "VALUES (?, ?, ?, ?)",
         (scan.station_id, mac, scan.timestamp, scan.rssi),
     )
 
-    # 2. Identify runner (beacon MAC → bib number → runner)
+    # identify runner (beacon MAC -> bib number -> runner)
     c.execute(
         "SELECT r.id FROM runners r "
         "JOIN beacons b ON r.bib_number = b.bib_number "
@@ -375,7 +357,7 @@ def ingest_scan(scan: ScanEvent):
         return {"status": "ignored", "reason": "unknown_beacon"}
     runner_id = row["id"]
 
-    # 3. Cooldown check
+    # coldown check
     scan_time = datetime.fromisoformat(scan.timestamp)
     c.execute(
         "SELECT last_scan_time FROM cooldown_tracker "
@@ -389,21 +371,21 @@ def ingest_scan(scan: ScanEvent):
             conn.commit(); conn.close()
             return {"status": "ignored", "reason": "cooldown"}
 
-    # Update cooldown timestamp
+    # update cooldown timestamp
     c.execute(
         "INSERT OR REPLACE INTO cooldown_tracker "
         "(runner_id, station_id, last_scan_time) VALUES (?, ?, ?)",
         (runner_id, scan.station_id, scan.timestamp),
     )
 
-    # 4. Progress / lap reconstruction
+    # progress / lap reconstruction
     c.execute(
         "SELECT * FROM runner_progress WHERE runner_id = ?", (runner_id,)
     )
     prog = c.fetchone()
 
     if not prog:
-        # First-ever scan for this runner
+        # first-ever scan for this runner
         if scan.station_id == 1:
             nxt = 2; laps = 0
             event = "started"
@@ -423,7 +405,7 @@ def ingest_scan(scan: ScanEvent):
         laps = prog["laps_completed"]
 
         if scan.station_id == nxt:
-            # Expected checkpoint
+            # expected checkpoint
             if nxt == CHECKPOINT_COUNT:
                 laps += 1; nxt = 1
                 event = "lap_complete"
@@ -431,7 +413,7 @@ def ingest_scan(scan: ScanEvent):
                 nxt += 1
                 event = "checkpoint"
         elif scan.station_id > nxt:
-            # Skipped one or more — be lenient
+            # skipped one or more (lenient)
             if scan.station_id == CHECKPOINT_COUNT:
                 laps += 1; nxt = 1
                 event = "lap_complete_skipped"
@@ -454,10 +436,9 @@ def ingest_scan(scan: ScanEvent):
     return result
 
 
-# ── Runner management ─────────────────────────────────────────
-
+# runner management
 @app.post("/api/runners")
-def add_runner(runner: RunnerCreate):
+def add_runner(runner: RunnerCreate, _: bool = Depends(require_admin)):
     conn = get_db()
     try:
         c = conn.cursor()
@@ -527,7 +508,7 @@ def update_runner(bib_number: int, runner: RunnerUpdate,
 
 
 @app.delete("/api/runners/{bib_number}")
-def delete_runner(bib_number: int):
+def delete_runner(bib_number: int, _: bool = Depends(require_admin)):
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT id FROM runners WHERE bib_number = ?", (bib_number,))
@@ -543,7 +524,7 @@ def delete_runner(bib_number: int):
     return {"status": "ok"}
 
 
-# ── Beacon configuration ──────────────────────────────────────
+# Beacon configuration
 
 @app.get("/api/beacons")
 def list_beacons():
@@ -574,7 +555,7 @@ def beacon_whitelist():
 
 
 @app.post("/api/beacons")
-def add_beacon(beacon: BeaconCreate):
+def add_beacon(beacon: BeaconCreate, _: bool = Depends(require_admin)):
     conn = get_db()
     try:
         conn.execute(
@@ -616,7 +597,7 @@ def update_beacon(bib_number: int, beacon: BeaconUpdate,
 
 
 @app.delete("/api/beacons/{bib_number}")
-def delete_beacon(bib_number: int):
+def delete_beacon(bib_number: int, _: bool = Depends(require_admin)):
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT bib_number FROM beacons WHERE bib_number = ?", (bib_number,))
@@ -628,7 +609,7 @@ def delete_beacon(bib_number: int):
     return {"status": "ok"}
 
 
-# ── Course distance + pace estimation ─────────────────────────
+# course distance + pace estimation
 
 def get_course_distances():
     """Return (segments_m, lap_total_m, cumulative_m).
@@ -650,7 +631,7 @@ def get_course_distances():
     cum = {1: 0.0}
     acc = 0.0
     for k in range(2, CHECKPOINT_COUNT + 1):
-        acc += segments[k - 2]          # segment from (k-1) → k
+        acc += segments[k - 2] # segment from (k-1) -> k
         cum[k] = acc
     return segments, lap_m, cum
 
@@ -672,8 +653,7 @@ def estimate_pace(laps, last_station_id, start_iso, last_iso, lap_m, cum):
     return round((elapsed / 60) / dist_km, 2), round(dist_km / (elapsed / 3600), 2)
 
 
-# ── Dashboard data ────────────────────────────────────────────
-
+# Dashboard data
 @app.get("/api/leaderboard")
 def leaderboard():
     conn = get_db()
@@ -729,8 +709,8 @@ def stats():
     ).fetchone()[0]
     conn.close()
 
-    # Donations are now distance-based, so derive them (and the average pace)
-    # from the leaderboard, which already computes per-runner distance.
+    # Donations are distance-based, derive them (and the average pace)
+    # from leaderboard (already computes per-runner distance)
     lb = leaderboard()
     total_donations = sum(r["donations"] for r in lb)
     paces = [r["pace_min_km"] for r in lb if r["pace_min_km"]]
@@ -748,11 +728,10 @@ def stats():
     }
 
 
-# ── Admin: reset everything ──────────────────────────────────
-
+# Admin: reset everything
 @app.post("/api/reset")
-def reset_all():
-    """Wipe all data — useful during testing."""
+def reset_all(_: bool = Depends(require_admin)):
+    """Wipe all data — admin only."""
     conn = get_db()
     for t in ("scan_events", "cooldown_tracker", "runner_progress", "runners", "beacons"):
         conn.execute(f"DELETE FROM {t}")
@@ -760,25 +739,13 @@ def reset_all():
     return {"status": "ok", "message": "All data cleared"}
 
 
-# ── Serve dashboard ───────────────────────────────────────────
-
+# Serve dashboard
 @app.get("/", response_class=HTMLResponse)
 def serve_dashboard():
     path = Path(__file__).parent / "static" / "dashboard.html"
     return HTMLResponse(path.read_text(encoding="utf-8"))
 
-
 @app.get("/admin", response_class=HTMLResponse)
 def serve_admin():
     path = Path(__file__).parent / "static" / "admin.html"
     return HTMLResponse(path.read_text(encoding="utf-8"))
-
-
-# ── Startup ───────────────────────────────────────────────────
-
-@app.on_event("startup")
-def on_startup():
-    init_db()
-    print("✔ Database initialised")
-    print("✔ Dashboard at http://localhost:8000")
-    print("✔ API docs  at http://localhost:8000/docs")

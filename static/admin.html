@@ -405,7 +405,7 @@
       row.innerHTML = `
         <div class="station-row">
           <div class="station-num">${s.id}</div>
-          <input type="text" id="name-${s.id}" value="${s.name.replace(/"/g, '&quot;')}">
+          <input type="text" id="name-${s.id}" value="${esc(s.name)}">
         </div>
         <div class="coord" id="coord-${s.id}"></div>`;
       list.appendChild(row);
@@ -563,7 +563,9 @@
 
   // ── Shared helpers ────────────────────────────
   function esc(s) {
-    return String(s == null ? '' : s).replace(/"/g, '&quot;');
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
   function parseAmount(v) {
     const n = parseFloat(String(v).replace(',', '.'));

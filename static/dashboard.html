@@ -449,6 +449,12 @@
     return `${Math.round(diff / 3600)}h`;
   }
 
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
   function renderLeaderboard(rows) {
     const el = document.getElementById('leaderboard-body');
     if (!rows.length) {
@@ -470,7 +476,7 @@
       html += `<tr>
         <td class="rank ${rankClass(i)}">${i + 1}</td>
         <td><span class="bib">${r.bib_number}</span></td>
-        <td>${r.name}</td>
+        <td>${esc(r.name)}</td>
         <td class="laps-cell">${r.laps}</td>
         <td class="dist-cell">${r.distance_km.toFixed(2)}</td>
         <td class="pace-cell">${fmtPace(r.pace_min_km)}</td>

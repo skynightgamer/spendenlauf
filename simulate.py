@@ -1,25 +1,29 @@
 """
-Spendenlauf Simulator
-=====================
 Registers test runners, then simulates them running laps by
-firing scan events at the backend.  Great for testing without
-any ESP32 hardware.
-
-Usage:
-  python simulate.py               # defaults to http://localhost:8000
-  python simulate.py --url http://192.168.1.50:8000
-  python simulate.py --runners 10  # override runner count (default 20)
-  python simulate.py --speed 5     # 5x real time (default 10x)
+firing scan events at the backend.
 """
-
 import argparse
+import os
 import random
 import time
 import requests
 from datetime import datetime, timedelta
+from pathlib import Path
+
+def load_env_creds():
+    """Read ADMIN_USERNAME / ADMIN_PASSWORD from .env (if present)"""
+    env_path = Path(__file__).parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
+    return (os.environ.get("ADMIN_USERNAME"),
+            os.environ.get("ADMIN_PASSWORD"))
 
 # ── Configuration ──────────────────────────────────────────────
-
 CHECKPOINT_COUNT = 5
 REAL_LAP_SECONDS = 10 * 60  # ~10 min for a 2 km lap at jogging pace
 
@@ -36,20 +40,18 @@ LAST_NAMES = [
     "Krüger", "Hartmann", "Lange",
 ]
 
-
 def mac(i: int) -> str:
-    """Generate a fake beacon MAC for runner index i."""
+    """Generate fake beacon MAC for runner index i."""
     return f"AA:BB:CC:DD:EE:{i:02X}"
 
-
-def register_runners(base_url: str, n: int):
+def register_runners(http: requests.Session, base_url: str, n: int):
     """Register n test runners, each with a random donation amount."""
-    print(f"\n📋 Registering {n} runners…")
+    print(f"\nRegistering {n} runners…")
     runners = []
     used_names = set()
 
     for i in range(n):
-        # Pick a unique first/last name combination
+        # Pick unique first/last name combination
         while True:
             vorname  = random.choice(FIRST_NAMES)
             nachname = random.choice(LAST_NAMES)
@@ -61,11 +63,11 @@ def register_runners(base_url: str, n: int):
         bib = i + 1
         beacon_mac = mac(bib)
 
-        # 1. Pair the start number with a beacon MAC.
-        requests.post(f"{base_url}/api/beacons",
-                      json={"bib_number": bib, "beacon_mac": beacon_mac})
+        # pair the start number with a beacon MAC
+        http.post(f"{base_url}/api/beacons",
+                  json={"bib_number": bib, "beacon_mac": beacon_mac})
 
-        # 2. Register the runner against that start number.
+        # register the runner against that start number
         runner = {
             "vorname": vorname,
             "nachname": nachname,
@@ -74,7 +76,7 @@ def register_runners(base_url: str, n: int):
         }
         runner["beacon_mac"] = beacon_mac  # kept locally for the scan loop
 
-        resp = requests.post(f"{base_url}/api/runners", json=runner)
+        resp = http.post(f"{base_url}/api/runners", json=runner)
         if resp.status_code == 200:
             print(f"   ✔ #{bib:>2}  {name:<22} "
                   f"€{runner['donation_per_km']:.2f}/km  [{beacon_mac}]")
@@ -88,14 +90,12 @@ def register_runners(base_url: str, n: int):
     return runners
 
 
-def simulate(base_url: str, runners: list, speed: float):
+def simulate(http: requests.Session, base_url: str, runners: list, speed: float):
     """
     Simulate runners circling the course.
-
     Each runner gets a random pace (seconds per checkpoint gap).
-    The simulation runs in accelerated time controlled by --speed.
     """
-    print(f"\n🏃 Starting simulation at {speed}× speed  (Ctrl+C to stop)\n")
+    print(f"\n Starting simulation at {speed}× speed  (Ctrl+C to stop)\n")
 
     # Each runner: next checkpoint, simulated time until next scan
     states = []
@@ -127,7 +127,7 @@ def simulate(base_url: str, runners: list, speed: float):
                         "timestamp":  sim_time.isoformat(),
                         "rssi":       random.randint(-75, -55),
                     }
-                    resp = requests.post(f"{base_url}/api/scan", json=scan)
+                    resp = http.post(f"{base_url}/api/scan", json=scan)
                     result = resp.json()
 
                     bib  = s["runner"]["bib_number"]
@@ -162,25 +162,42 @@ def main():
     parser.add_argument("--runners", type=int, default=20,
                         help="Number of test runners (default: 20)")
     parser.add_argument("--speed",   type=float, default=10.0,
-                        help="Simulation speed multiplier (default: 10×)")
+                        help="Simulation speed multiplier (default: 10x)")
     parser.add_argument("--reset",   action="store_true",
                         help="Wipe all data before starting")
+    parser.add_argument("--username", default=None,
+                        help="Admin username (default: from .env / ADMIN_USERNAME)")
+    parser.add_argument("--password", default=None,
+                        help="Admin password (default: from .env / ADMIN_PASSWORD)")
     args = parser.parse_args()
 
     # Health check
     try:
         requests.get(f"{args.url}/api/stats", timeout=3)
     except requests.ConnectionError:
-        print(f"✘ Cannot reach server at {args.url}")
+        print(f"Cannot reach server at {args.url}")
         print(f"  Start it first:  uvicorn server:app --host 0.0.0.0 --port 8000")
         return
 
-    if args.reset:
-        print("🗑  Resetting all data…")
-        requests.post(f"{args.url}/api/reset")
+    # Authenticate (runner/beacon/reset endpoints are admin-only)
+    env_user, env_pass = load_env_creds()
+    username = args.username or env_user
+    password = args.password or env_pass
+    http = requests.Session()
+    resp = http.post(f"{args.url}/api/login",
+                     json={"username": username, "password": password})
+    if resp.status_code != 200:
+        print("Admin login failed. Set ADMIN_USERNAME/ADMIN_PASSWORD in .env "
+              "(and COOKIE_SECURE=false for local HTTP), or pass "
+              "--username/--password.")
+        return
 
-    runners = register_runners(args.url, args.runners)
-    simulate(args.url, runners, args.speed)
+    if args.reset:
+        print("Resetting all data…")
+        http.post(f"{args.url}/api/reset")
+
+    runners = register_runners(http, args.url, args.runners)
+    simulate(http, args.url, runners, args.speed)
 
 
 if __name__ == "__main__":
