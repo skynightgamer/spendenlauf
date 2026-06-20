@@ -29,6 +29,10 @@ load_env()
 CHECKPOINT_COUNT = 5          # Stations around the loop
 COOLDOWN_SECONDS = 180        # 3 min per-station cooldown
 LAP_DISTANCE_KM  = 2.0        # Loop length in km
+# Pace is based on "moving time": gaps between scans longer than this are
+# treated as a rest (the runner left the loop for the field) and excluded.
+# Normal loop segments are well under this; a rest excursion is far longer.
+MOVING_GAP_MAX_SECONDS = 300  # 5 min
 DATABASE          = "spendenlauf.db"
 
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
@@ -38,11 +42,11 @@ COOKIE_SECURE  = os.environ.get("COOKIE_SECURE", "true").strip().lower() != "fal
 
 # Default station placement: a loop around the Schyrenbad / Sachsenstraße, München-Au.
 DEFAULT_STATIONS = [
-    (1, "Station 1", 48.11680, 11.57930),
-    (2, "Station 2", 48.11620, 11.58150),
-    (3, "Station 3", 48.11480, 11.58100),
-    (4, "Station 4", 48.11470, 11.57850),
-    (5, "Station 5", 48.11570, 11.57800),
+    (1, "Station 1", 48.11707, 11.56193),
+    (2, "Station 2", 48.11374, 11.56096),
+    (3, "Station 3", 48.11161, 11.56136),
+    (4, "Station 4", 48.11051, 11.56398),
+    (5, "Station 5", 48.11214, 11.56304),
 ]
 
 # In-memory session store: token → expiry. Cleared on server restart.
@@ -116,6 +120,12 @@ def init_db():
         )
     """)
 
+    # Pace computation walks every scan for a beacon ordered by time.
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scan_beacon "
+        "ON scan_events (beacon_mac, timestamp)"
+    )
+
     c.execute("""
         CREATE TABLE IF NOT EXISTS cooldown_tracker (
             runner_id      INTEGER NOT NULL,
@@ -169,6 +179,29 @@ def set_setting(key: str, value) -> None:
     )
     conn.commit()
     conn.close()
+
+
+# Runtime-tunable settings, editable from the admin panel.
+# key -> (default, caster, min, max). Stored in `settings` as "cfg_<key>"; the
+# module constants above are the defaults when nothing has been saved yet.
+CONFIG_SPEC = {
+    "checkpoint_count":       (CHECKPOINT_COUNT,       int,   2,   20),
+    "cooldown_seconds":       (COOLDOWN_SECONDS,       int,   0,   3600),
+    "lap_distance_km":        (LAP_DISTANCE_KM,        float, 0.1, 100.0),
+    "moving_gap_max_seconds": (MOVING_GAP_MAX_SECONDS, int,   30,  3600),
+}
+
+
+def get_config(key: str):
+    """Current value of a tunable setting (saved override, else the default)."""
+    default, cast, _, _ = CONFIG_SPEC[key]
+    val = get_setting("cfg_" + key, None)
+    if val is None:
+        return default
+    try:
+        return cast(val)
+    except (TypeError, ValueError):
+        return default
 
 
 # Admin authentication (cookie session)
@@ -236,6 +269,12 @@ class RouteUpdate(BaseModel):
     map_view:       Optional[dict]          = None  # {"center": [lat,lng], "zoom": int}
     segments:       Optional[List[float]]   = None  # leg distances in m: 1→2,2→3,…,N→1
     lap_distance_m: Optional[float]         = None  # full lap length in metres
+
+class ConfigUpdate(BaseModel):
+    checkpoint_count:       Optional[int]   = None
+    cooldown_seconds:       Optional[int]   = None
+    lap_distance_km:        Optional[float] = None
+    moving_gap_max_seconds: Optional[int]   = None
 
 
 # Admin auth endpoints
@@ -320,6 +359,28 @@ def update_route(data: RouteUpdate, _: bool = Depends(require_admin)):
     return {"status": "ok"}
 
 
+@app.get("/api/config")
+def get_config_all():
+    return {k: get_config(k) for k in CONFIG_SPEC}
+
+
+@app.put("/api/config")
+def update_config(data: ConfigUpdate, _: bool = Depends(require_admin)):
+    for key, val in data.model_dump(exclude_unset=True).items():
+        if val is None:
+            continue
+        _, cast, lo, hi = CONFIG_SPEC[key]
+        try:
+            v = cast(val)
+        except (TypeError, ValueError):
+            raise HTTPException(400, detail=f"{key}: ungültiger Wert")
+        if not (lo <= v <= hi):
+            raise HTTPException(
+                400, detail=f"{key}: muss zwischen {lo} und {hi} liegen")
+        set_setting("cfg_" + key, v)
+    return {"status": "ok", "config": {k: get_config(k) for k in CONFIG_SPEC}}
+
+
 # Scan ingestion + lap reconstruction
 @app.post("/api/scan")
 def ingest_scan(scan: ScanEvent):
@@ -367,7 +428,7 @@ def ingest_scan(scan: ScanEvent):
     cd = c.fetchone()
     if cd:
         last = datetime.fromisoformat(cd["last_scan_time"])
-        if (scan_time - last).total_seconds() < COOLDOWN_SECONDS:
+        if (scan_time - last).total_seconds() < get_config("cooldown_seconds"):
             conn.commit(); conn.close()
             return {"status": "ignored", "reason": "cooldown"}
 
@@ -403,10 +464,11 @@ def ingest_scan(scan: ScanEvent):
     else:
         nxt  = prog["next_checkpoint"]
         laps = prog["laps_completed"]
+        checkpoints = get_config("checkpoint_count")
 
         if scan.station_id == nxt:
             # expected checkpoint
-            if nxt == CHECKPOINT_COUNT:
+            if nxt == checkpoints:
                 laps += 1; nxt = 1
                 event = "lap_complete"
             else:
@@ -414,7 +476,7 @@ def ingest_scan(scan: ScanEvent):
                 event = "checkpoint"
         elif scan.station_id > nxt:
             # skipped one or more (lenient)
-            if scan.station_id == CHECKPOINT_COUNT:
+            if scan.station_id == checkpoints:
                 laps += 1; nxt = 1
                 event = "lap_complete_skipped"
             else:
@@ -616,41 +678,59 @@ def get_course_distances():
 
     segments[i]  = metres from station (i+1) to (i+2); the last wraps N→1.
     cumulative[k]= metres from station 1 to station k along the lap (1-indexed).
-    Falls back to equal segments derived from LAP_DISTANCE_KM when no measured
-    route has been saved yet, so pace still works before a route is drawn.
+    Falls back to equal segments derived from the configured lap distance when
+    no measured route has been saved yet, so pace still works before a route is
+    drawn.
     """
+    checkpoints = get_config("checkpoint_count")
+    lap_km      = get_config("lap_distance_km")
     segments = get_setting("segments", None)
     lap_m    = get_setting("lap_distance_m", None)
-    if not segments or len(segments) != CHECKPOINT_COUNT:
-        per = LAP_DISTANCE_KM * 1000 / CHECKPOINT_COUNT
-        segments = [per] * CHECKPOINT_COUNT
-        lap_m = LAP_DISTANCE_KM * 1000
+    if not segments or len(segments) != checkpoints:
+        per = lap_km * 1000 / checkpoints
+        segments = [per] * checkpoints
+        lap_m = lap_km * 1000
     if not lap_m:
         lap_m = sum(segments)
 
     cum = {1: 0.0}
     acc = 0.0
-    for k in range(2, CHECKPOINT_COUNT + 1):
+    for k in range(2, checkpoints + 1):
         acc += segments[k - 2] # segment from (k-1) -> k
         cum[k] = acc
     return segments, lap_m, cum
 
 
-def estimate_pace(laps, last_station_id, start_iso, last_iso, lap_m, cum):
-    """Rough average pace (min/km) and speed (km/h) over the whole run,
-    from distance covered ÷ elapsed time between first and last station pass."""
-    if not start_iso or not last_iso or not last_station_id:
-        return None, None
-    try:
-        elapsed = (datetime.fromisoformat(last_iso)
-                   - datetime.fromisoformat(start_iso)).total_seconds()
-    except ValueError:
+def moving_seconds(timestamps):
+    """Moving time in seconds from an ordered list of scan timestamps.
+
+    Sums the gaps between consecutive scans, excluding any gap longer than
+    the configured rest threshold — those are rests (the runner left the loop
+    for the field and stopped generating scans), not running time.
+    """
+    max_gap = get_config("moving_gap_max_seconds")
+    total = 0.0
+    for a, b in zip(timestamps, timestamps[1:]):
+        try:
+            gap = (datetime.fromisoformat(b)
+                   - datetime.fromisoformat(a)).total_seconds()
+        except ValueError:
+            continue
+        if 0 < gap <= max_gap:
+            total += gap
+    return total
+
+
+def estimate_pace(laps, last_station_id, moving_s, lap_m, cum):
+    """Average pace (min/km) and speed (km/h) over the supplied moving time,
+    i.e. distance covered ÷ time actually spent running (rests excluded)."""
+    if not last_station_id or not moving_s:
         return None, None
     dist_m = laps * lap_m + cum.get(last_station_id, 0.0)
-    if elapsed <= 0 or dist_m <= 0:
+    if moving_s <= 0 or dist_m <= 0:
         return None, None
     dist_km = dist_m / 1000
-    return round((elapsed / 60) / dist_km, 2), round(dist_km / (elapsed / 3600), 2)
+    return round((moving_s / 60) / dist_km, 2), round(dist_km / (moving_s / 3600), 2)
 
 
 # Dashboard data
@@ -659,16 +739,14 @@ def leaderboard():
     conn = get_db()
     rows = conn.execute("""
         SELECT r.vorname, r.nachname, r.bib_number, r.donation_per_km,
+               b.beacon_mac,
                COALESCE(p.laps_completed, 0) AS laps,
-               p.last_station_id, p.last_seen_time,
-               (SELECT MIN(timestamp) FROM scan_events e
-                 WHERE e.beacon_mac = b.beacon_mac) AS start_time
+               p.last_station_id, p.last_seen_time
         FROM runners r
         LEFT JOIN beacons b ON r.bib_number = b.bib_number
         LEFT JOIN runner_progress p ON r.id = p.runner_id
         ORDER BY laps DESC, r.bib_number ASC
     """).fetchall()
-    conn.close()
 
     _, lap_m, cum = get_course_distances()
     out = []
@@ -676,9 +754,20 @@ def leaderboard():
         laps = r["laps"]
         dist_m  = laps * lap_m + cum.get(r["last_station_id"], 0.0)
         dist_km = dist_m / 1000
-        pace, speed = estimate_pace(
-            laps, r["last_station_id"], r["start_time"], r["last_seen_time"],
-            lap_m, cum)
+        # Moving time: walk this runner's scans and drop the rest gaps.
+        ts = [row["timestamp"] for row in conn.execute(
+            "SELECT timestamp FROM scan_events WHERE beacon_mac = ? "
+            "ORDER BY timestamp", (r["beacon_mac"],))] if r["beacon_mac"] else []
+        moving_s = moving_seconds(ts)
+        if moving_s <= 0 and len(ts) >= 2:
+            # Every gap looked like a rest (e.g. a very slow walker); fall back
+            # to raw elapsed so the runner still shows a pace rather than "—".
+            try:
+                moving_s = (datetime.fromisoformat(ts[-1])
+                            - datetime.fromisoformat(ts[0])).total_seconds()
+            except ValueError:
+                moving_s = 0
+        pace, speed = estimate_pace(laps, r["last_station_id"], moving_s, lap_m, cum)
         out.append({
             "name":             f"{r['vorname']} {r['nachname']}".strip(),
             "bib_number":       r["bib_number"],
@@ -691,6 +780,7 @@ def leaderboard():
             "pace_min_km":      pace,
             "speed_kmh":        speed,
         })
+    conn.close()
     return out
 
 

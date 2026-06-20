@@ -192,6 +192,7 @@
       <button id="tab-btn-map" class="active" data-tab="map">Karten-Konfiguration</button>
       <button id="tab-btn-runners" data-tab="runners">Läufer-Konfiguration</button>
       <button id="tab-btn-beacons" data-tab="beacons">Beacon-Konfiguration</button>
+      <button id="tab-btn-settings" data-tab="settings">Einstellungen</button>
     </nav>
 
     <!-- Map config -->
@@ -269,6 +270,40 @@
 
         <div class="section-title">Beacons (<span id="beacon-count">0</span>)</div>
         <div id="beacons-list"></div>
+      </div>
+    </div>
+
+    <!-- Settings config -->
+    <div id="tab-settings" class="hidden">
+      <div class="runners-wrap">
+        <div class="section-title">Einstellungen</div>
+        <div class="hint">Steuern Rundenzählung und Tempoberechnung. Änderungen wirken sofort.</div>
+        <form class="runner-form" id="settings-form">
+          <div class="field">
+            <label for="cf-checkpoints">Anzahl Stationen</label>
+            <input type="number" id="cf-checkpoints" min="2" max="20" step="1" required>
+          </div>
+          <div class="field">
+            <label for="cf-cooldown">Stations-Cooldown (s)</label>
+            <input type="number" id="cf-cooldown" min="0" max="3600" step="1" required>
+          </div>
+          <div class="field">
+            <label for="cf-lap">Rundenlänge (km)</label>
+            <input type="number" id="cf-lap" min="0.1" max="100" step="0.01" required>
+          </div>
+          <div class="field">
+            <label for="cf-gap">Pausen-Schwelle (s)</label>
+            <input type="number" id="cf-gap" min="30" max="3600" step="1" required>
+          </div>
+          <button type="submit" class="primary">Speichern</button>
+        </form>
+        <div class="hint" style="margin-top:1rem;">
+          <strong>Anzahl Stationen:</strong> nur vor dem Lauf ändern — eine Änderung während des Laufs verfälscht laufende Runden.<br>
+          <strong>Stations-Cooldown:</strong> Mindestabstand zwischen zwei gewerteten Scans derselben Station.<br>
+          <strong>Rundenlänge:</strong> wird nur verwendet, wenn keine Strecke auf der Karte gezeichnet wurde.<br>
+          <strong>Pausen-Schwelle:</strong> Lücken zwischen Scans, die länger sind, gelten als Pause und zählen nicht zum Tempo.
+        </div>
+        <div class="status" id="settings-status"></div>
       </div>
     </div>
   </div>
@@ -542,9 +577,10 @@
 
   // ── Sub-tabs ──────────────────────────────────
   const TABS = {
-    map:     { panel: 'tab-map',     btn: 'tab-btn-map' },
-    runners: { panel: 'tab-runners', btn: 'tab-btn-runners' },
-    beacons: { panel: 'tab-beacons', btn: 'tab-btn-beacons' },
+    map:      { panel: 'tab-map',      btn: 'tab-btn-map' },
+    runners:  { panel: 'tab-runners',  btn: 'tab-btn-runners' },
+    beacons:  { panel: 'tab-beacons',  btn: 'tab-btn-beacons' },
+    settings: { panel: 'tab-settings', btn: 'tab-btn-settings' },
   };
 
   function selectTab(tab) {
@@ -557,6 +593,7 @@
     if (tab === 'map' && map) setTimeout(() => map.invalidateSize(), 0);
     if (tab === 'runners') loadRunners();
     if (tab === 'beacons') loadBeacons();
+    if (tab === 'settings') loadSettings();
   }
   Object.entries(TABS).forEach(([name, t]) =>
     document.getElementById(t.btn).addEventListener('click', () => selectTab(name)));
@@ -797,6 +834,53 @@
       beaconStatus(`Fehler: ${d.detail || 'Löschen fehlgeschlagen.'}`, false);
     }
   }
+
+  // ── Settings ──────────────────────────────────
+  let loadedCheckpoints = null;   // last saved station count, for change confirm
+
+  async function loadSettings() {
+    const res = await fetch(`${API}/api/config`);
+    if (!res.ok) return;
+    const cfg = await res.json();
+    loadedCheckpoints = cfg.checkpoint_count;
+    document.getElementById('cf-checkpoints').value = cfg.checkpoint_count;
+    document.getElementById('cf-cooldown').value    = cfg.cooldown_seconds;
+    document.getElementById('cf-lap').value         = cfg.lap_distance_km;
+    document.getElementById('cf-gap').value         = cfg.moving_gap_max_seconds;
+  }
+
+  document.getElementById('settings-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const el = document.getElementById('settings-status');
+    const newCheckpoints = parseInt(document.getElementById('cf-checkpoints').value, 10);
+    // Changing the station count mid-event corrupts in-flight laps — confirm.
+    if (newCheckpoints !== loadedCheckpoints && !confirm(
+        `Anzahl Stationen von ${loadedCheckpoints} auf ${newCheckpoints} ändern?\n\n` +
+        `Nur vor dem Lauf ändern — während des Laufs verfälscht dies laufende Runden.`)) {
+      document.getElementById('cf-checkpoints').value = loadedCheckpoints;
+      return;
+    }
+    const body = {
+      checkpoint_count:       newCheckpoints,
+      cooldown_seconds:       parseInt(document.getElementById('cf-cooldown').value, 10),
+      lap_distance_km:        parseFloat(document.getElementById('cf-lap').value),
+      moving_gap_max_seconds: parseInt(document.getElementById('cf-gap').value, 10),
+    };
+    const res = await fetch(`${API}/api/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      el.className = 'status ok';
+      el.textContent = '✔ Gespeichert.';
+      loadSettings();
+    } else {
+      el.className = 'status err';
+      el.textContent = `Fehler: ${data.detail || 'Speichern fehlgeschlagen.'}`;
+    }
+  });
 
   checkAuth();
 </script>

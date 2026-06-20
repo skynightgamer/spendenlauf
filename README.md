@@ -129,7 +129,7 @@ locations and the planned running route. Both are set up in the admin area.
 
 2. Open `http://localhost:8000/admin` and log in.
 
-3. The admin area has three sub-tabs:
+3. The admin area has four sub-tabs:
 
    **Karten-Konfiguration** — the station/route map editor:
    - **Stations** — drag the numbered markers onto their real-world spots; rename them inline.
@@ -147,17 +147,27 @@ locations and the planned running route. Both are set up in the admin area.
    **Beacon-Konfiguration** — pair start numbers with beacon MAC addresses
    (add / edit / delete). Configure beacons here before adding runners.
 
+   **Einstellungen** — tune the runtime settings without editing code or
+   restarting (station count, station cooldown, fallback lap length, rest
+   threshold — see [Configuration](#configuration)). Changes take effect on the
+   next scan / dashboard refresh. Changing **Anzahl Stationen** (station count)
+   asks for confirmation, since doing so mid-event invalidates in-flight laps.
+
 The map then appears on the main dashboard for everyone, with live runner
 counts per station. The map is restricted and defaults to the Munich area.
 
 ## Estimated pace
 
-Each runner's rough pace is estimated from the time between their station
-passes: distance covered (completed laps × measured lap length, plus progress
-within the current lap) ÷ elapsed time since their first scan. The leaderboard
-shows a **Pace** column (min/km) per runner and the stats row shows the field's
-**Ø Pace**. Distances use the measured route when a route has been drawn,
-otherwise they fall back to the `LAP_DISTANCE_KM` constant.
+Each runner's rough pace is estimated as distance covered (completed laps ×
+measured lap length, plus progress within the current lap) ÷ **moving time**.
+Moving time sums the gaps between a runner's scans but excludes any gap longer
+than the rest threshold (`moving_gap_max_seconds`, default 5 min): when a runner
+leaves the loop to rest in the field they stop generating scans, and that pause
+is dropped rather than counted as slow running. (If *every* gap looks like a
+rest — e.g. a very slow walker — it falls back to raw elapsed time so a pace is
+still shown.) The leaderboard shows a **Pace** column (min/km) per runner and
+the stats row shows the field's **Ø Pace**. Distances use the measured route
+when one has been drawn, otherwise the configurable fallback lap length.
 
 ### Stations & route
 
@@ -166,18 +176,40 @@ GET  /api/stations     — list stations with coordinates  (public)
 PUT  /api/stations     — update names/coordinates         (admin only)
 GET  /api/route        — { route, map_view, segments, lap_distance_m } (public)
 PUT  /api/route        — save route + map view + distances (admin only)
+GET  /api/config       — current runtime settings          (public)
+PUT  /api/config       — update runtime settings           (admin only)
+```
+
+`PUT /api/config` accepts any subset of the keys below; each is range-checked
+and persisted, taking effect immediately (no restart):
+
+```json
+{ "checkpoint_count": 5, "cooldown_seconds": 180,
+  "lap_distance_km": 2.0, "moving_gap_max_seconds": 300 }
 ```
 
 ## Configuration
 
-Edit the constants at the top of `server.py`:
+These four settings are tunable at runtime from the admin panel's
+**Einstellungen** tab (or `PUT /api/config`). The override is stored in the
+database and takes effect on the next scan / refresh — no restart. The constants
+at the top of `server.py` are just the **defaults** used until an override is
+saved:
 
-| Constant           | Default | Meaning                                    |
-| ------------------ | ------- | ------------------------------------------ |
-| `CHECKPOINT_COUNT` | 5       | Number of stations around the loop         |
-| `COOLDOWN_SECONDS` | 180     | Ignore re-scans within this window (3 min) |
-| `LAP_DISTANCE_KM`  | 2.0     | Loop length for distance calculations      |
-| `DATABASE`          | `spendenlauf.db` | SQLite file path                  |
+| Key / constant                              | Default | Meaning                                              |
+| ------------------------------------------- | ------- | ---------------------------------------------------- |
+| `checkpoint_count` / `CHECKPOINT_COUNT`     | 5       | Number of stations around the loop                   |
+| `cooldown_seconds` / `COOLDOWN_SECONDS`     | 180     | Ignore re-scans of the same station within this window |
+| `lap_distance_km` / `LAP_DISTANCE_KM`       | 2.0     | Fallback loop length when no route has been drawn     |
+| `moving_gap_max_seconds` / `MOVING_GAP_MAX_SECONDS` | 300 | Scan gaps longer than this count as a rest, excluded from pace |
+
+> **`checkpoint_count` is structural.** Changing it mid-event invalidates
+> in-flight laps and assumes the physical stations match, so the admin UI
+> confirms before applying it — set it before runners start. The simulator reads
+> this value from `/api/config` at startup, so it always matches the server.
+
+`DATABASE` (`spendenlauf.db`, the SQLite file path) remains a code-only constant
+in `server.py`.
 
 ## Production deployment
 
@@ -291,7 +323,7 @@ The algorithm is lenient to handle real-world BLE flakiness:
 - Hitting checkpoint 5 (after any forward progress) counts as a completed lap.
 - If a runner skips a checkpoint (e.g. hits 4 when expecting 3), the system accepts it and keeps going.
 - Out-of-order scans (going backward) are ignored.
-- Per-station cooldown prevents the same runner being counted twice at one station within 3 minutes.
+- Per-station cooldown prevents the same runner being counted twice at one station within the cooldown window (default 3 min, configurable).
 
 ## ESP32 firmware
 

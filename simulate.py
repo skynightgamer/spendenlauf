@@ -1,7 +1,3 @@
-"""
-Registers test runners, then simulates them running laps by
-firing scan events at the backend.
-"""
 import argparse
 import os
 import random
@@ -24,7 +20,7 @@ def load_env_creds():
             os.environ.get("ADMIN_PASSWORD"))
 
 # ── Configuration ──────────────────────────────────────────────
-CHECKPOINT_COUNT = 5
+CHECKPOINT_COUNT = 5        # fallback; the real value is fetched from /api/config
 REAL_LAP_SECONDS = 10 * 60  # ~10 min for a 2 km lap at jogging pace
 
 FIRST_NAMES = [
@@ -90,17 +86,19 @@ def register_runners(http: requests.Session, base_url: str, n: int):
     return runners
 
 
-def simulate(http: requests.Session, base_url: str, runners: list, speed: float):
+def simulate(http: requests.Session, base_url: str, runners: list, speed: float,
+             checkpoint_count: int = CHECKPOINT_COUNT):
     """
     Simulate runners circling the course.
     Each runner gets a random pace (seconds per checkpoint gap).
     """
-    print(f"\n Starting simulation at {speed}× speed  (Ctrl+C to stop)\n")
+    print(f"\n Starting simulation at {speed}× speed, "
+          f"{checkpoint_count} stations  (Ctrl+C to stop)\n")
 
     # Each runner: next checkpoint, simulated time until next scan
     states = []
     for r in runners:
-        gap = REAL_LAP_SECONDS / CHECKPOINT_COUNT
+        gap = REAL_LAP_SECONDS / checkpoint_count
         pace = gap * random.uniform(0.8, 1.2)  # ±20% speed variance
         states.append({
             "runner":         r,
@@ -143,9 +141,9 @@ def simulate(http: requests.Session, base_url: str, runners: list, speed: float)
                         print(f"   📍 #{bib:>2} {name:<20} Station {cp}  ({evt})")
 
                     # Advance to next checkpoint
-                    s["next_cp"] = (s["next_cp"] % CHECKPOINT_COUNT) + 1
+                    s["next_cp"] = (s["next_cp"] % checkpoint_count) + 1
                     # New random pace for variety
-                    base_gap = REAL_LAP_SECONDS / CHECKPOINT_COUNT
+                    base_gap = REAL_LAP_SECONDS / checkpoint_count
                     s["pace"] = base_gap * random.uniform(0.8, 1.2)
                     s["secs_remaining"] = s["pace"]
 
@@ -179,6 +177,15 @@ def main():
         print(f"  Start it first:  uvicorn server:app --host 0.0.0.0 --port 8000")
         return
 
+    # Match the server's station count so laps reconstruct correctly even if it
+    # was changed in the admin panel. /api/config is public; fall back on error.
+    checkpoint_count = CHECKPOINT_COUNT
+    try:
+        cfg = requests.get(f"{args.url}/api/config", timeout=3).json()
+        checkpoint_count = int(cfg.get("checkpoint_count", CHECKPOINT_COUNT))
+    except (requests.RequestException, ValueError, TypeError):
+        print(f"  (could not read /api/config, using {CHECKPOINT_COUNT} stations)")
+
     # Authenticate (runner/beacon/reset endpoints are admin-only)
     env_user, env_pass = load_env_creds()
     username = args.username or env_user
@@ -197,7 +204,7 @@ def main():
         http.post(f"{args.url}/api/reset")
 
     runners = register_runners(http, args.url, args.runners)
-    simulate(http, args.url, runners, args.speed)
+    simulate(http, args.url, runners, args.speed, checkpoint_count)
 
 
 if __name__ == "__main__":
