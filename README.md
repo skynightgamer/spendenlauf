@@ -127,13 +127,17 @@ in `server.py`.
 
 ## How laps are counted
 
-The algorithm is lenient to handle real-world BLE flakiness:
+A lap is the full loop **1 → 2 → 3 → 4 → 5 → 1**, counted when the runner
+crosses the start line (station 1) again — not when they reach the last
+station. This keeps the lap count consistent with the distance estimate, which
+measures progress from station 1. The algorithm is lenient to handle real-world
+BLE flakiness:
 
-- Each runner has a "next expected checkpoint" starting at 1.
-- Hitting the expected checkpoint advances it (1 → 2 → 3 → 4 → 5).
-- Hitting checkpoint 5 (after any forward progress) counts as a completed lap.
-- If a runner skips a checkpoint (e.g. hits 4 when expecting 3), the system accepts it and keeps going.
-- Out-of-order scans (going backward) are ignored.
+- Each runner has a "next expected checkpoint". After station 1 it points at 2 and advances cyclically (2 → 3 → 4 → 5 → 1).
+- Hitting the expected checkpoint advances it.
+- Re-crossing station 1 after any forward progress counts as a completed lap.
+- If a runner skips a checkpoint (e.g. hits 4 when expecting 3), the system accepts it and keeps going. If they were expected back at station 1 but reappear further along, they crossed the line undetected and the lap still counts.
+- Out-of-order scans (going backward) and re-scans at the start are ignored.
 - Per-station cooldown prevents the same runner being counted twice at one station within the cooldown window (default 3 min, configurable).
 
 ## Deployment

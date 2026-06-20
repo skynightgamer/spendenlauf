@@ -406,12 +406,18 @@ def ingest_scan(scan: ScanEvent, _: bool = Depends(require_station)):
     pace can't be faked. Stations sit on the same LAN, so receive time ≈ the
     true detection time.
 
-    Lap logic (lenient):
-      - Track next_checkpoint per runner (starts at 1).
-      - If the scan matches next_checkpoint → advance.
-      - If the scan is *ahead* of next_checkpoint → accept (skip gap).
-      - Hitting checkpoint 5 (after progressing through ≥1) → lap complete.
-      - Out-of-order / behind → ignored.
+    Lap logic (lenient). A lap is the full loop 1 → 2 → … → N → 1, so it is
+    counted when the runner crosses the start line (station 1) again, not when
+    they reach the last station. This keeps lap count and the distance estimate
+    (which measures progress from station 1) consistent.
+      - Track next_checkpoint per runner. After station 1 it points at 2, and
+        advances cyclically 2 → 3 → … → N → 1.
+      - Scan matches next_checkpoint → advance.
+      - Scan is *ahead* of next_checkpoint → accept (skip gap), advance.
+      - Re-crossing station 1 after any forward progress → lap complete.
+      - If we were expecting station 1 but the runner reappears further along,
+        they crossed the line undetected → still count the lap.
+      - Out-of-order / behind / re-scan at the start → ignored.
     """
     conn = get_db()
     c = conn.cursor()
@@ -468,13 +474,12 @@ def ingest_scan(scan: ScanEvent, _: bool = Depends(require_station)):
     prog = c.fetchone()
 
     if not prog:
-        # first-ever scan for this runner
-        if scan.station_id == 1:
-            nxt = 2; laps = 0
-            event = "started"
-        else:
-            nxt = 1; laps = 0
-            event = "waiting_for_start"
+        # first-ever scan for this runner: start tracking from where they were
+        # first seen. next_checkpoint points one past the detected station.
+        checkpoints = get_config("checkpoint_count")
+        laps = 0
+        nxt = (scan.station_id % checkpoints) + 1
+        event = "started" if scan.station_id == 1 else "waiting_for_start"
         c.execute(
             "INSERT INTO runner_progress "
             "(runner_id, next_checkpoint, laps_completed, "
@@ -487,23 +492,35 @@ def ingest_scan(scan: ScanEvent, _: bool = Depends(require_station)):
         nxt  = prog["next_checkpoint"]
         laps = prog["laps_completed"]
         checkpoints = get_config("checkpoint_count")
+        sid = scan.station_id
 
-        if scan.station_id == nxt:
-            # expected checkpoint
-            if nxt == checkpoints:
-                laps += 1; nxt = 1
-                event = "lap_complete"
+        if sid == 1:
+            # Crossing the start/finish line.
+            if nxt == 2:
+                # At the start with no progress since the gun or the last lap —
+                # a re-scan, not a new lap.
+                event = "out_of_order"
             else:
-                nxt += 1
-                event = "checkpoint"
-        elif scan.station_id > nxt:
-            # skipped one or more (lenient)
-            if scan.station_id == checkpoints:
-                laps += 1; nxt = 1
+                laps += 1; nxt = 2
+                event = "lap_complete"
+        elif nxt == 1:
+            # We expected them back at the start line but they were detected
+            # further along → they crossed it undetected. Count the lap and
+            # resume from where they actually are. (sid == checkpoints would be
+            # a re-scan of the last station, so it does not count.)
+            if sid < checkpoints:
+                laps += 1; nxt = (sid % checkpoints) + 1
                 event = "lap_complete_skipped"
             else:
-                nxt = scan.station_id + 1
-                event = "checkpoint_skipped"
+                event = "out_of_order"
+        elif sid == nxt:
+            # expected checkpoint
+            nxt = (nxt % checkpoints) + 1
+            event = "checkpoint"
+        elif sid > nxt:
+            # skipped one or more (lenient)
+            nxt = (sid % checkpoints) + 1
+            event = "checkpoint_skipped"
         else:
             event = "out_of_order"
 
