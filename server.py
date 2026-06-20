@@ -1,6 +1,6 @@
-from fastapi import FastAPI, HTTPException, Response, Cookie, Depends
+from fastapi import FastAPI, HTTPException, Response, Cookie, Depends, Header
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 import sqlite3
 import os
@@ -39,6 +39,11 @@ ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 SESSION_TTL    = timedelta(hours=12)
 COOKIE_SECURE  = os.environ.get("COOKIE_SECURE", "true").strip().lower() != "false"
+
+# Pre-shared key the ESP32 stations send on every ingestion call. Without it,
+# /api/scan and the beacon whitelist are open to anyone who knows the URL, so a
+# spoofed POST can inflate any runner's laps/donations.
+STATION_API_KEY = os.environ.get("STATION_API_KEY", "")
 
 # Default station placement: a loop around the Schyrenbad / Sachsenstraße, München-Au.
 DEFAULT_STATIONS = [
@@ -227,12 +232,21 @@ def require_admin(session: Optional[str] = Cookie(default=None)) -> bool:
     return True
 
 
+def require_station(x_api_key: Optional[str] = Header(default=None)) -> bool:
+    """Guard station-only endpoints with the pre-shared STATION_API_KEY."""
+    if not STATION_API_KEY:
+        # Fail closed: an unset key would otherwise leave ingestion wide open.
+        raise HTTPException(503, detail="STATION_API_KEY not configured in .env")
+    if not x_api_key or not secrets.compare_digest(x_api_key, STATION_API_KEY):
+        raise HTTPException(401, detail="Invalid or missing station key")
+    return True
+
+
 # Pydantic models
 class ScanEvent(BaseModel):
-    station_id: int                # 1–5
-    beacon_mac: str                # e.g. "AA:BB:CC:DD:EE:01"
-    timestamp:  str                # ISO 8601
-    rssi:       int                # e.g. -65
+    station_id: int                          # 1–5
+    beacon_mac: str                          # e.g. "AA:BB:CC:DD:EE:01"
+    rssi:       int = Field(ge=-100, le=0)    # plausible BLE range; rejects fabricated values
 
 class RunnerCreate(BaseModel):
     vorname:         str
@@ -383,9 +397,14 @@ def update_config(data: ConfigUpdate, _: bool = Depends(require_admin)):
 
 # Scan ingestion + lap reconstruction
 @app.post("/api/scan")
-def ingest_scan(scan: ScanEvent):
+def ingest_scan(scan: ScanEvent, _: bool = Depends(require_station)):
     """
-    Accept a scan event from an ESP32 station.
+    Accept a scan event from an authenticated ESP32 station.
+
+    The server stamps every event with its own receive time, so a leaked or
+    forged timestamp can't be spaced to slip past the per-station cooldown and
+    pace can't be faked. Stations sit on the same LAN, so receive time ≈ the
+    true detection time.
 
     Lap logic (lenient):
       - Track next_checkpoint per runner (starts at 1).
@@ -398,11 +417,15 @@ def ingest_scan(scan: ScanEvent):
     c = conn.cursor()
     mac = scan.beacon_mac.upper()
 
+    # Authoritative server-side timestamp (naive local time).
+    scan_time = datetime.now()
+    ts_iso = scan_time.isoformat()
+
     # store raw event (useful for post-hoc analysis)
     c.execute(
         "INSERT INTO scan_events (station_id, beacon_mac, timestamp, rssi) "
         "VALUES (?, ?, ?, ?)",
-        (scan.station_id, mac, scan.timestamp, scan.rssi),
+        (scan.station_id, mac, ts_iso, scan.rssi),
     )
 
     # identify runner (beacon MAC -> bib number -> runner)
@@ -418,8 +441,7 @@ def ingest_scan(scan: ScanEvent):
         return {"status": "ignored", "reason": "unknown_beacon"}
     runner_id = row["id"]
 
-    # coldown check
-    scan_time = datetime.fromisoformat(scan.timestamp)
+    # cooldown check (against the authoritative server clock)
     c.execute(
         "SELECT last_scan_time FROM cooldown_tracker "
         "WHERE runner_id = ? AND station_id = ?",
@@ -436,7 +458,7 @@ def ingest_scan(scan: ScanEvent):
     c.execute(
         "INSERT OR REPLACE INTO cooldown_tracker "
         "(runner_id, station_id, last_scan_time) VALUES (?, ?, ?)",
-        (runner_id, scan.station_id, scan.timestamp),
+        (runner_id, scan.station_id, ts_iso),
     )
 
     # progress / lap reconstruction
@@ -458,7 +480,7 @@ def ingest_scan(scan: ScanEvent):
             "(runner_id, next_checkpoint, laps_completed, "
             " last_station_id, last_seen_time) "
             "VALUES (?, ?, ?, ?, ?)",
-            (runner_id, nxt, laps, scan.station_id, scan.timestamp),
+            (runner_id, nxt, laps, scan.station_id, ts_iso),
         )
         result = {"status": "ok", "event": event, "laps": laps}
     else:
@@ -490,7 +512,7 @@ def ingest_scan(scan: ScanEvent):
             "SET next_checkpoint=?, laps_completed=?, "
             "    last_station_id=?, last_seen_time=? "
             "WHERE runner_id=?",
-            (nxt, laps, scan.station_id, scan.timestamp, runner_id),
+            (nxt, laps, scan.station_id, ts_iso, runner_id),
         )
         result = {"status": "ok", "event": event, "laps": laps}
 
@@ -603,10 +625,12 @@ def list_beacons():
 
 
 @app.get("/api/beacons/whitelist")
-def beacon_whitelist():
+def beacon_whitelist(_: bool = Depends(require_station)):
     """Flat list of all registered beacon MAC addresses.
 
-    Intended for the ESP boards to fetch the BLE scan whitelist.
+    Intended for the ESP boards to fetch the BLE scan whitelist. Station-key
+    protected so the valid MACs aren't handed out to anyone who could then
+    forge scans for them.
     """
     conn = get_db()
     rows = conn.execute(

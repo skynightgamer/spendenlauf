@@ -3,7 +3,6 @@ import os
 import random
 import time
 import requests
-from datetime import datetime, timedelta
 from pathlib import Path
 
 def load_env_creds():
@@ -107,13 +106,11 @@ def simulate(http: requests.Session, base_url: str, runners: list, speed: float,
             "pace":           pace,                       # secs per checkpoint
         })
 
-    sim_time = datetime.now()
     tick = 0.25  # real seconds per tick
 
     try:
         while True:
             sim_advance = tick * speed  # simulated seconds this tick
-            sim_time += timedelta(seconds=sim_advance)
 
             for s in states:
                 s["secs_remaining"] -= sim_advance
@@ -122,7 +119,6 @@ def simulate(http: requests.Session, base_url: str, runners: list, speed: float,
                     scan = {
                         "station_id": s["next_cp"],
                         "beacon_mac": s["runner"]["beacon_mac"],
-                        "timestamp":  sim_time.isoformat(),
                         "rssi":       random.randint(-75, -55),
                     }
                     resp = http.post(f"{base_url}/api/scan", json=scan)
@@ -191,6 +187,12 @@ def main():
     username = args.username or env_user
     password = args.password or env_pass
     http = requests.Session()
+    # /api/scan is station-key protected; send the key on every request.
+    station_key = os.environ.get("STATION_API_KEY", "")
+    if station_key:
+        http.headers["X-API-Key"] = station_key
+    else:
+        print("  (no STATION_API_KEY in .env — /api/scan will reject the sim)")
     resp = http.post(f"{args.url}/api/login",
                      json={"username": username, "password": password})
     if resp.status_code != 200:
@@ -198,6 +200,11 @@ def main():
               "(and COOKIE_SECURE=false for local HTTP), or pass "
               "--username/--password.")
         return
+
+    # The server now stamps scans with its own clock, so the per-station
+    # cooldown runs on real time — accelerated sim laps would be rejected.
+    # Disable it for the run (admin-only, restore from the panel afterwards).
+    http.put(f"{args.url}/api/config", json={"cooldown_seconds": 0})
 
     if args.reset:
         print("Resetting all data…")
