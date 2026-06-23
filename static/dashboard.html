@@ -4,6 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Spendenlauf — Live Tracker</title>
+<!-- Apply saved theme before paint so there is no light flash on dark mode. -->
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem('theme');
+      if (t) document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  })();
+</script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
@@ -13,19 +22,59 @@
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
-    --bg:        #0b1117;
-    --surface:   #151d27;
-    --border:    #1e2a38;
-    --text:      #e4e8ed;
-    --text-dim:  #7a8a9e;
-    --accent:    #00e676;
-    --accent-2:  #40c4ff;
-    --gold:      #ffd740;
-    --silver:    #b0bec5;
-    --bronze:    #ff8a65;
-    --danger:    #ff5252;
-    --radius:    10px;
+    /* Three-colour brand palette: blue, green, orange on white. */
+    --blue:      #2563eb;
+    --green:     #16a34a;
+    --orange:    #ea580c;
+
+    --bg:        #ffffff;
+    --surface:   #ffffff;
+    --border:    #e3e6ea;
+    --text:      #111827;
+    --text-dim:  #6b7280;
+
+    /* Semantic aliases kept so the existing markup/JS need no changes. */
+    --accent:    var(--green);
+    --accent-2:  var(--blue);
+    --gold:      var(--orange);
+    --silver:    var(--blue);
+    --bronze:    var(--green);
+    --danger:    #dc2626;
+    --radius:    0;
   }
+
+  /* ── Dark mode ───────────────────────────────── */
+  /* Toggled via data-theme on <html>; the brand colours brighten slightly so
+     they stay legible on the dark surface. Semantic aliases inherit these. */
+  :root[data-theme="dark"] {
+    --blue:      #5b9dff;
+    --green:     #34d27f;
+    --orange:    #ff8a4c;
+
+    --bg:        #0d1117;
+    --surface:   #161b22;
+    --border:    #2a313c;
+    --text:      #e6edf3;
+    --text-dim:  #8b98a9;
+  }
+  :root[data-theme="dark"] tr:hover td            { background: rgba(255,255,255,0.04); }
+  :root[data-theme="dark"] .bib                   { background: #222b36; }
+  :root[data-theme="dark"] .station-badge.none    { background: #222b36; }
+  :root[data-theme="dark"] #course-map            { background: #0d1117; }
+
+  /* Theme toggle button (header) */
+  .header-right { display: flex; align-items: center; gap: 1rem; }
+  .theme-toggle {
+    font-family: inherit;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 0.3rem 0.55rem;
+    font-size: 0.95rem;
+    line-height: 1;
+  }
+  .theme-toggle:hover { color: var(--text); border-color: var(--text-dim); }
 
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -41,8 +90,8 @@
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    padding: 0.65rem 1.6rem;
-    background: linear-gradient(135deg, #0d1a26 0%, #132232 100%);
+    padding: 0.1rem 1.6rem;
+    background: var(--surface);
     border-bottom: 1px solid var(--border);
   }
   header h1 {
@@ -50,7 +99,10 @@
     font-weight: 800;
     letter-spacing: -0.02em;
   }
-  header h1 span { color: var(--accent); }
+  /* Tri-colour title: "Spen" blue, "den" green, "lauf" orange. */
+  header h1 .t-blue   { color: var(--blue); }
+  header h1 .t-green  { color: var(--green); }
+  header h1 .t-orange { color: var(--orange); }
   .subtitle {
     color: var(--text-dim);
     font-size: 0.9rem;
@@ -59,7 +111,7 @@
   .live-dot {
     display: inline-block;
     width: 8px; height: 8px;
-    background: var(--accent);
+    background: var(--green);
     border-radius: 50%;
     margin-right: 6px;
     animation: pulse 1.5s infinite;
@@ -71,24 +123,30 @@
   }
 
   /* ── Layout ──────────────────────────────────── */
+  /* Everything lives on one continuous sheet — no gaps, no rounded corners.
+     Sections are separated only by hairline 1px dividers. */
   .container {
     max-width: none;
     margin: 0;
-    padding: 1.5rem 2rem;
+    padding: 0;
   }
 
   /* ── Stat cards ──────────────────────────────── */
+  /* A single connected strip: cells share borders instead of floating apart.
+     Container draws top/left, each cell draws right/bottom → seams stay 1px. */
   .stats {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 0.8rem;
-    margin-bottom: 1.8rem;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 0;
+    border-top: 1px solid var(--border);
+    border-left: 1px solid var(--border);
   }
   .stat-card {
     background: var(--surface);
-    border: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 1rem 1.1rem;
+    padding: 1.1rem 1.1rem;
     text-align: center;
   }
   .stat-card .value {
@@ -104,17 +162,20 @@
     color: var(--text-dim);
     margin-top: 0.3rem;
   }
-  .stat-card.laps   .value { color: var(--accent); }
-  .stat-card.dist   .value { color: var(--accent-2); }
-  .stat-card.money  .value { color: var(--gold); }
-  .stat-card.pace   .value { color: var(--accent-2); }
+  .stat-card.laps   .value { color: var(--green); }
+  .stat-card.dist   .value { color: var(--blue); }
+  .stat-card.money  .value { color: var(--orange); }
+  .stat-card.pace   .value { color: var(--blue); }
 
   /* ── Two-column: leaderboard left, map right ─── */
+  /* Flush against each other; a single divider sits between the two panels. */
   .main-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 1.4rem;
+    gap: 0;
     align-items: stretch;
+    border-left: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
   }
   /* Allow each column to shrink below its content width so the leaderboard
      can scroll internally rather than overflow the panel border. */
@@ -127,7 +188,7 @@
   /* ── Leaderboard ─────────────────────────────── */
   .panel {
     background: var(--surface);
-    border: 1px solid var(--border);
+    border-right: 1px solid var(--border);
     border-radius: var(--radius);
     overflow: hidden;
   }
@@ -136,7 +197,7 @@
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--text-dim);
-    padding: 0.9rem 1.1rem 0.5rem;
+    padding: 0.9rem 1.1rem 0.6rem;
   }
 
   /* Let the leaderboard scroll horizontally instead of being clipped by the
@@ -164,21 +225,21 @@
     white-space: nowrap;
   }
   tr:last-child td { border-bottom: none; }
-  tr:hover td { background: rgba(255,255,255,0.02); }
+  tr:hover td { background: #f6f8fa; }
 
   .rank { font-weight: 700; width: 2.5rem; text-align: center; }
-  .rank-1 { color: var(--gold); }
-  .rank-2 { color: var(--silver); }
-  .rank-3 { color: var(--bronze); }
+  .rank-1 { color: var(--orange); }
+  .rank-2 { color: var(--blue); }
+  .rank-3 { color: var(--green); }
 
   .bib {
     display: inline-block;
-    background: var(--border);
+    background: #f1f3f5;
     color: var(--text);
     font-weight: 700;
     font-size: 0.78rem;
     padding: 0.15rem 0.5rem;
-    border-radius: 4px;
+    border-radius: var(--radius);
     min-width: 2.4rem;
     text-align: center;
   }
@@ -192,11 +253,11 @@
     font-variant-numeric: tabular-nums;
   }
   .donation-cell {
-    color: var(--gold);
+    color: var(--orange);
     font-variant-numeric: tabular-nums;
   }
   .pace-cell {
-    color: var(--accent-2);
+    color: var(--blue);
     font-variant-numeric: tabular-nums;
   }
 
@@ -205,12 +266,12 @@
     font-size: 0.72rem;
     font-weight: 600;
     padding: 0.15rem 0.45rem;
-    border-radius: 4px;
-    background: rgba(0,230,118,0.12);
-    color: var(--accent);
+    border-radius: var(--radius);
+    background: rgba(22,163,74,0.10);
+    color: var(--green);
   }
   .station-badge.none {
-    background: rgba(122,138,158,0.12);
+    background: #f1f3f5;
     color: var(--text-dim);
   }
 
@@ -226,8 +287,8 @@
     flex: 1;
     min-height: 560px;
     width: 100%;
-    border-radius: 0 0 var(--radius) var(--radius);
-    background: var(--bg);
+    border-radius: var(--radius);
+    background: #eef1f4;
   }
   @media (max-width: 800px) {
     #course-map { min-height: 380px; }
@@ -239,16 +300,16 @@
   .leaflet-zoom-anim .runner-pin-marker { transition: none; }
   .runner-pin {
     width: 28px; height: 28px;
-    background: var(--gold);
+    background: var(--orange);
     border: 2px solid #fff;
     border-radius: 50% 50% 50% 0;
     transform: rotate(45deg);
     display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 1px 5px rgba(0,0,0,0.55);
+    box-shadow: 0 1px 5px rgba(0,0,0,0.30);
   }
   .runner-pin span {
     transform: rotate(-45deg);
-    font-size: 0.7rem; font-weight: 800; color: #1a1200;
+    font-size: 0.7rem; font-weight: 800; color: #fff;
   }
   .map-empty {
     padding: 2.5rem 1rem;
@@ -263,37 +324,43 @@
     justify-content: center;
     width: 30px; height: 30px;
     border-radius: 50%;
-    background: var(--border);
+    background: #fff;
     color: var(--text);
-    border: 2px solid var(--text-dim);
+    border: 2px solid var(--blue);
     font-weight: 700;
     font-size: 0.8rem;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.25);
   }
   .station-marker.active {
-    background: var(--accent);
-    color: var(--bg);
-    border-color: var(--accent);
+    background: var(--green);
+    color: #fff;
+    border-color: var(--green);
   }
   .leaflet-popup-content { font-size: 0.85rem; }
 
   /* ── Station status strip ────────────────────── */
   /* At-a-glance liveness for each checkpoint so a volunteer can spot a station
      that has gone dark (lost power / Wi-Fi) without reading the map. */
+  /* Connected strip: chips share a divider, no gaps, sharp edges. */
   .stations-strip {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.6rem;
-    margin-bottom: 1.4rem;
+    gap: 0;
+    border-left: 1px solid var(--border);
   }
   .st-chip {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 0.5rem;
+    /* Grow equally so the row fills the full width instead of leaving a
+       gap on the right. flex-basis 0 → every chip ends up the same width. */
+    flex: 1 1 0;
     background: var(--surface);
-    border: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 0.5rem 0.8rem;
+    padding: 0.6rem 0.9rem;
     font-size: 0.82rem;
     min-width: 0;
   }
@@ -303,34 +370,40 @@
     flex: 0 0 auto;
     background: var(--text-dim);
   }
-  .st-chip.online  .st-dot { background: var(--accent); animation: pulse 2s infinite; }
+  .st-chip.online  .st-dot { background: var(--green); animation: pulse 2s infinite; }
   .st-chip.offline .st-dot { background: var(--danger); }
-  .st-chip.offline { border-color: var(--danger); }
+  .st-chip.offline { background: rgba(220,38,38,0.05); }
   .st-chip.never   .st-dot { background: var(--text-dim); }
   .st-name { font-weight: 600; }
   .st-meta { color: var(--text-dim); font-variant-numeric: tabular-nums; }
   .st-chip.offline .st-meta { color: var(--danger); }
   .st-queued {
-    color: var(--gold);
+    color: var(--orange);
     font-size: 0.72rem;
     font-variant-numeric: tabular-nums;
   }
 
   /* ── Footer ──────────────────────────────────── */
   footer {
-    text-align: center;
-    padding: 2rem 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.35rem 1.6rem;
+    border-top: 1px solid var(--border);
     color: var(--text-dim);
     font-size: 0.75rem;
   }
-  footer span { color: var(--accent); }
+  footer span { color: var(--green); }
 </style>
 </head>
 
 <body>
   <header>
-    <h1>Spenden<span>lauf</span></h1>
-    <div class="subtitle"><span class="live-dot"></span>Live Tracker (3s)</div>
+    <h1><span class="t-blue">Spen</span><span class="t-green">den</span><span class="t-orange">lauf</span></h1>
+    <div class="header-right">
+      <div class="subtitle"><span class="live-dot"></span>Live Tracker (3s)</div>
+      <button class="theme-toggle" id="theme-toggle" aria-label="Design wechseln" title="Hell/Dunkel">◐</button>
+    </div>
   </header>
 
   <div class="container">
@@ -382,8 +455,8 @@
   </div>
 
   <footer>
-    Powered by <span>ESP32 + BLE</span>
-    &nbsp;·&nbsp; <a href="/admin" style="color:var(--text-dim)">Admin</a>
+    <div>Powered by <span>ESP32 + BLE</span></div>
+    <a href="/admin" style="color:var(--text-dim)">Admin</a>
   </footer>
 
 <script>
@@ -391,8 +464,21 @@
   const API          = window.location.origin;
   const POLL_MS      = 3000;
   const DEFAULT_VIEW  = { center: [48.1157, 11.5798], zoom: 16 };  // Schyrenbad, München-Au
-  const MUNICH_BOUNDS = [[48.06, 11.36], [48.25, 11.72]];
-  const MIN_ZOOM      = 11;
+
+  // ── Theme toggle ──────────────────────────────
+  const themeToggle = document.getElementById('theme-toggle');
+  function syncThemeIcon() {
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    themeToggle.textContent = dark ? '◑' : '◐';
+  }
+  themeToggle.addEventListener('click', () => {
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const next = dark ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('theme', next); } catch (e) {}
+    syncThemeIcon();
+  });
+  syncThemeIcon();
 
   // ── Leaflet map setup ─────────────────────────
   let map = null;
@@ -427,18 +513,14 @@
 
     map = L.map('course-map', {
       scrollWheelZoom: false,
-      maxBounds: MUNICH_BOUNDS,
-      maxBoundsViscosity: 1.0,
-      minZoom: MIN_ZOOM,
     });
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
-      bounds: MUNICH_BOUNDS,
       attribution: '© OpenStreetMap',
     }).addTo(map);
 
     if (route.route && route.route.length) {
-      routeLine = L.polyline(route.route, { color: '#00e676', weight: 4 }).addTo(map);
+      routeLine = L.polyline(route.route, { color: '#16a34a', weight: 4 }).addTo(map);
     }
 
     placed.forEach(s => {

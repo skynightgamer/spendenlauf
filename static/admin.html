@@ -4,6 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Spendenlauf — Admin</title>
+<!-- Apply saved theme before paint so there is no light flash on dark mode. -->
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem('theme');
+      if (t) document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  })();
+</script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
@@ -11,10 +20,31 @@
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
-    --bg: #0b1117; --surface: #151d27; --border: #1e2a38;
-    --text: #e4e8ed; --text-dim: #7a8a9e; --accent: #00e676;
-    --accent-2: #40c4ff; --danger: #ff5252; --radius: 10px;
+    /* Three-colour brand palette: blue, green, orange on white. */
+    --blue: #2563eb; --green: #16a34a; --orange: #ea580c;
+    --bg: #ffffff; --surface: #ffffff; --border: #e3e6ea;
+    --text: #111827; --text-dim: #6b7280;
+    /* Semantic aliases kept so the existing markup/JS need no changes. */
+    --accent: var(--green); --accent-2: var(--blue);
+    --danger: #dc2626; --radius: 0;
   }
+
+  /* ── Dark mode ───────────────────────────────── */
+  /* Toggled via data-theme on <html>; brand colours brighten for legibility. */
+  :root[data-theme="dark"] {
+    --blue: #5b9dff; --green: #34d27f; --orange: #ff8a4c;
+    --bg: #0d1117; --surface: #161b22; --border: #2a313c;
+    --text: #e6edf3; --text-dim: #8b98a9;
+  }
+
+  /* Theme toggle button (header) */
+  .theme-toggle {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text-dim); padding: 0.3rem 0.55rem;
+    font-size: 0.95rem; line-height: 1;
+  }
+  .theme-toggle:hover { color: var(--text); border-color: var(--text-dim); }
+
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: var(--bg); color: var(--text); min-height: 100vh; line-height: 1.5;
@@ -22,11 +52,14 @@
   }
   header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 0.5rem 1.4rem; background: linear-gradient(135deg, #0d1a26, #132232);
+    padding: 0.35rem 1.4rem; background: var(--surface);
     border-bottom: 1px solid var(--border); flex: 0 0 auto;
   }
   header h1 { font-size: 1.3rem; font-weight: 800; }
-  header h1 span { color: var(--accent); }
+  /* Tri-colour title: "Spen" blue, "den" green, "lauf" orange. */
+  header h1 .t-blue   { color: var(--blue); }
+  header h1 .t-green  { color: var(--green); }
+  header h1 .t-orange { color: var(--orange); }
   header a, header button { font-size: 0.85rem; }
   a { color: var(--accent-2); text-decoration: none; }
 
@@ -37,8 +70,8 @@
     color: var(--text); cursor: pointer;
   }
   button:hover { border-color: var(--text-dim); }
-  button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
-  button.active  { background: var(--accent-2); color: var(--bg); border-color: var(--accent-2); }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.active  { background: var(--accent-2); color: #fff; border-color: var(--accent-2); }
   button.danger  { color: var(--danger); }
 
   .hidden { display: none !important; }
@@ -51,7 +84,7 @@
   }
   .subtabs button { background: transparent; border-color: transparent; }
   .subtabs button.active {
-    background: var(--accent-2); color: var(--bg); border-color: var(--accent-2);
+    background: var(--accent-2); color: #fff; border-color: var(--accent-2);
   }
 
   /* ── Login ──────────────────────────────────── */
@@ -65,7 +98,7 @@
   .field label { display: block; font-size: 0.78rem; color: var(--text-dim);
                  text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.3rem; }
   input[type=text], input[type=password], input[type=number] {
-    width: 100%; padding: 0.6rem 0.7rem; border-radius: 8px;
+    width: 100%; padding: 0.6rem 0.7rem; border-radius: var(--radius);
     border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.95rem;
   }
   input:focus, select:focus {
@@ -90,7 +123,7 @@
   .station-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
   .station-num {
     flex: 0 0 26px; height: 26px; border-radius: 50%; background: var(--accent);
-    color: var(--bg); font-weight: 700; font-size: 0.8rem;
+    color: #fff; font-weight: 700; font-size: 0.8rem;
     display: flex; align-items: center; justify-content: center;
   }
   .station-row input { flex: 1; padding: 0.4rem 0.5rem; font-size: 0.85rem; }
@@ -99,7 +132,7 @@
   .btn-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem; }
   #route-info:not(:empty) {
     margin-top: 0.9rem; padding: 0.8rem; background: var(--bg);
-    border: 1px solid var(--border); border-radius: 8px; font-size: 0.82rem;
+    border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.82rem;
   }
   #route-info .lap-total { font-weight: 700; color: var(--accent); font-size: 0.95rem; }
   #route-info .seg { display: flex; justify-content: space-between; color: var(--text-dim);
@@ -115,7 +148,7 @@
   .station-marker {
     display: flex; align-items: center; justify-content: center;
     width: 30px; height: 30px; border-radius: 50%;
-    background: var(--accent); color: var(--bg);
+    background: var(--accent); color: #fff;
     border: 2px solid #fff; font-weight: 700; font-size: 0.8rem;
     box-shadow: 0 1px 4px rgba(0,0,0,0.5);
   }
@@ -137,7 +170,7 @@
   .runner-form input, .runner-form select,
   .beacon-form input { font-size: 0.9rem; }
   .runner-form select {
-    width: 100%; padding: 0.6rem 0.7rem; border-radius: 8px;
+    width: 100%; padding: 0.6rem 0.7rem; border-radius: var(--radius);
     border: 1px solid var(--border); background: var(--bg); color: var(--text);
   }
   .runner-form button, .beacon-form button { white-space: nowrap; }
@@ -151,7 +184,7 @@
   .runners-table td { padding: 0.4rem; border-bottom: 1px solid var(--border); }
   .runners-table input, .runners-table select {
     width: 100%; padding: 0.4rem 0.5rem; font-size: 0.85rem;
-    border-radius: 8px; border: 1px solid var(--border);
+    border-radius: var(--radius); border: 1px solid var(--border);
     background: var(--bg); color: var(--text);
   }
   .runners-table .laps-col { color: var(--text-dim); font-variant-numeric: tabular-nums; text-align: center; }
@@ -162,9 +195,10 @@
 </head>
 <body>
   <header>
-    <h1>Spenden<span>lauf</span> — Admin</h1>
+    <h1><span class="t-blue">Spen</span><span class="t-green">den</span><span class="t-orange">lauf</span> — Admin</h1>
     <div>
       <a href="/">← Dashboard</a>
+      <button class="theme-toggle" id="theme-toggle" aria-label="Design wechseln" title="Hell/Dunkel" style="margin-left:1rem;">◐</button>
       <button id="logout-btn" class="danger" style="display:none; margin-left:1rem;">Abmelden</button>
     </div>
   </header>
@@ -312,13 +346,25 @@
   const API = window.location.origin;
   // Schyrenbad / Sachsenstraße, München-Au.
   const DEFAULT_VIEW   = { center: [48.1157, 11.5798], zoom: 16 };
-  // The Spendenlauf is in Munich → keep the map within the city.
-  const MUNICH_BOUNDS  = [[48.06, 11.36], [48.25, 11.72]];
-  const MIN_ZOOM       = 11;
 
   const loginView  = document.getElementById('login-view');
   const editorView = document.getElementById('editor-view');
   const logoutBtn  = document.getElementById('logout-btn');
+
+  // ── Theme toggle ──────────────────────────────
+  const themeToggle = document.getElementById('theme-toggle');
+  function syncThemeIcon() {
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    themeToggle.textContent = dark ? '◑' : '◐';
+  }
+  themeToggle.addEventListener('click', () => {
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const next = dark ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('theme', next); } catch (e) {}
+    syncThemeIcon();
+  });
+  syncThemeIcon();
 
   let map = null;
   let routePts = [];          // [[lat,lng], …]
@@ -394,14 +440,10 @@
     const view = route.map_view ||
       (placed.length ? null : DEFAULT_VIEW);
 
-    map = L.map('map', {
-      maxBounds: MUNICH_BOUNDS,
-      maxBoundsViscosity: 1.0,
-      minZoom: MIN_ZOOM,
-    });
+    map = L.map('map');
     map.setView((view || DEFAULT_VIEW).center, (view || DEFAULT_VIEW).zoom);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19, bounds: MUNICH_BOUNDS, attribution: '© OpenStreetMap',
+      maxZoom: 19, attribution: '© OpenStreetMap',
     }).addTo(map);
 
     // Existing route + measured distances.
@@ -458,7 +500,7 @@
 
   function redrawRoute() {
     if (routeLine) map.removeLayer(routeLine);
-    routeLine = L.polyline(routePts, { color: '#00e676', weight: 4 }).addTo(map);
+    routeLine = L.polyline(routePts, { color: '#16a34a', weight: 4 }).addTo(map);
   }
 
   // ── Route along real streets (OSRM) ───────────
