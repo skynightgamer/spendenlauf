@@ -51,6 +51,9 @@ Create `/etc/systemd/system/spendenlauf.service`:
 [Unit]
 Description=Spendenlauf Tracker
 After=network.target
+# Never give up restarting — by default systemd stops trying after 5 crashes
+# in 10s ("start-limit hit"). During an event we always want it to come back.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -64,6 +67,13 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 ```
+
+`Restart=always` + `StartLimitIntervalSec=0` is what makes the server
+self-healing: if the process crashes, runs out of memory, or the machine
+reboots, systemd brings it back within ~3s with no human intervention. The
+SQLite data survives a restart because it lives on disk — but a crash can still
+lose whatever was written in the last few minutes if the disk itself dies, which
+is what the backups in the next section guard against.
 
 > `WorkingDirectory` must point at the app folder so the relative
 > `spendenlauf.db` path and `.env` resolve correctly. Make sure the `User`
@@ -81,7 +91,87 @@ journalctl -u spendenlauf -f               # follow logs
 
 After deploying new code: `sudo systemctl restart spendenlauf`.
 
-## 5. nginx + TLS
+## 5. Database backups (snapshot every few minutes)
+
+The whole event lives in one SQLite file. systemd keeps the *process* alive, but
+that won't help if the file is lost or corrupted. So during the event we take a
+consistent snapshot every few minutes and keep a rolling history — worst case we
+lose only the last few minutes, not the day.
+
+The repo ships [`backup-db.sh`](backup-db.sh). It uses `sqlite3 .backup` (a
+proper online backup) rather than `cp`, because the DB runs in **WAL mode** and a
+plain copy taken mid-write can be torn or miss the `-wal` file. It also runs an
+`integrity_check` on each snapshot and prunes to the most recent `KEEP` files.
+
+Install the `sqlite3` CLI if it isn't already present:
+
+```bash
+sudo apt-get install -y sqlite3
+```
+
+Drive it from a **systemd timer** (survives reboots, logs to the journal).
+Create `/etc/systemd/system/spendenlauf-backup.service`:
+
+```ini
+[Unit]
+Description=Spendenlauf DB backup
+After=spendenlauf.service
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/spendenlauf
+# KEEP=288 × 5 min ≈ 24h of history. Tune to taste.
+Environment=APP_DIR=/opt/spendenlauf KEEP=288
+ExecStart=/opt/spendenlauf/backup-db.sh
+```
+
+And `/etc/systemd/system/spendenlauf-backup.timer`:
+
+```ini
+[Unit]
+Description=Snapshot the Spendenlauf DB every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Make the script executable, then enable the timer:
+
+```bash
+chmod +x /opt/spendenlauf/backup-db.sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now spendenlauf-backup.timer
+
+sudo systemctl list-timers spendenlauf-backup.timer   # when it next fires
+sudo systemctl start spendenlauf-backup.service       # take one now to test
+ls -lt /opt/spendenlauf/backups/                      # newest snapshot on top
+```
+
+> **Tip:** for real durability, point `BACKUP_DIR` at a different disk or sync
+> the `backups/` folder offsite (e.g. `rclone`/`rsync` to cloud storage), so a
+> dead disk doesn't take the snapshots with it.
+>
+> Prefer cron? `*/5 * * * * APP_DIR=/opt/spendenlauf KEEP=288 /opt/spendenlauf/backup-db.sh`.
+
+**Restore** (after stopping the service so nothing is writing):
+
+```bash
+sudo systemctl stop spendenlauf
+cp /opt/spendenlauf/backups/spendenlauf-YYYYMMDD-HHMMSS.db /opt/spendenlauf/spendenlauf.db
+# Clear any stale WAL/SHM sidecars from the old DB:
+rm -f /opt/spendenlauf/spendenlauf.db-wal /opt/spendenlauf/spendenlauf.db-shm
+sudo chown www-data:www-data /opt/spendenlauf/spendenlauf.db
+sudo systemctl start spendenlauf
+```
+
+## 6. nginx + TLS
 
 The repo ships an [`nginx.config`](nginx.config) for `spendenlauf.taskminder.de`.
 It redirects HTTP -> HTTPS, proxies to `127.0.0.1:8000`, sets security headers (HSTS,

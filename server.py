@@ -35,6 +35,11 @@ LAP_DISTANCE_KM  = 2.0        # Loop length in km
 MOVING_GAP_MAX_SECONDS = 300  # 5 min
 DATABASE          = "spendenlauf.db"
 
+# A station is considered "dark" if nothing (heartbeat or scan) has arrived from
+# it within this window. Stations heartbeat every ~20s, so this tolerates a
+# couple of missed beats / a brief reconnect before flagging.
+STATION_OFFLINE_SECONDS = 75
+
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 SESSION_TTL    = timedelta(hours=12)
@@ -156,6 +161,18 @@ def init_db():
         )
     """)
 
+    # Liveness per station. Updated on every heartbeat and every scan so the
+    # dashboard can show, at a glance, which checkpoints have gone dark — a
+    # station with no runner nearby still heartbeats, so silence means trouble.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS station_status (
+            station_id INTEGER PRIMARY KEY,
+            last_seen  TEXT    NOT NULL,
+            queued     INTEGER DEFAULT 0,
+            source     TEXT
+        )
+    """)
+
     # Seed one row per checkpoint with default coordinates near the Schyrenbad.
     for sid, name, lat, lng in DEFAULT_STATIONS:
         c.execute(
@@ -184,6 +201,25 @@ def set_setting(key: str, value) -> None:
     )
     conn.commit()
     conn.close()
+
+
+def touch_station(c: sqlite3.Cursor, station_id: int,
+                  queued: Optional[int], source: str) -> None:
+    """Mark a station alive *now* using an already-open cursor (caller commits).
+
+    `queued` is the station's flash-buffer depth; pass None to leave the stored
+    value untouched (e.g. a scan, which doesn't carry buffer depth).
+    """
+    now_iso = datetime.now().isoformat()
+    c.execute(
+        "INSERT INTO station_status (station_id, last_seen, queued, source) "
+        "VALUES (?, ?, COALESCE(?, 0), ?) "
+        "ON CONFLICT(station_id) DO UPDATE SET "
+        "    last_seen = excluded.last_seen, "
+        "    queued    = COALESCE(?, station_status.queued), "
+        "    source    = excluded.source",
+        (station_id, now_iso, queued, source, queued),
+    )
 
 
 # Runtime-tunable settings, editable from the admin panel.
@@ -247,6 +283,17 @@ class ScanEvent(BaseModel):
     station_id: int                          # 1–5
     beacon_mac: str                          # e.g. "AA:BB:CC:DD:EE:01"
     rssi:       int = Field(ge=-100, le=0)    # plausible BLE range; rejects fabricated values
+    # Seconds elapsed between the detection and this POST. Live scans send 0 (or
+    # omit it); a scan that was buffered on the station's flash during a Wi-Fi /
+    # server outage sends how old it is, so the server can reconstruct the real
+    # detection time instead of stamping the (much later) moment it drained the
+    # buffer. Capped at 24h so a forged value can only backdate within the event.
+    age_s:      int = Field(default=0, ge=0, le=86400)
+
+
+class Heartbeat(BaseModel):
+    station_id: int
+    queued:     int = Field(default=0, ge=0)   # scans waiting in the station's flash buffer
 
 class RunnerCreate(BaseModel):
     vorname:         str
@@ -423,9 +470,17 @@ def ingest_scan(scan: ScanEvent, _: bool = Depends(require_station)):
     c = conn.cursor()
     mac = scan.beacon_mac.upper()
 
-    # Authoritative server-side timestamp (naive local time).
-    scan_time = datetime.now()
+    # Authoritative server-side timestamp (naive local time). For a buffered
+    # scan the station reports how many seconds ago it was actually detected, so
+    # we subtract that to recover the true detection time. Live scans send
+    # age_s == 0, leaving this at "now". age_s is bounded by the model, so the
+    # most a station can do is backdate within the event window.
+    scan_time = datetime.now() - timedelta(seconds=scan.age_s)
     ts_iso = scan_time.isoformat()
+
+    # A scan proves the station is alive; refresh its liveness (with its buffer
+    # depth) even when this particular event is later ignored as a duplicate.
+    touch_station(c, scan.station_id, queued=None, source="scan")
 
     # store raw event (useful for post-hoc analysis)
     c.execute(
@@ -535,6 +590,52 @@ def ingest_scan(scan: ScanEvent, _: bool = Depends(require_station)):
 
     conn.commit(); conn.close()
     return result
+
+
+# Station liveness (heartbeat + status)
+@app.post("/api/station/heartbeat")
+def station_heartbeat(hb: Heartbeat, _: bool = Depends(require_station)):
+    """Lightweight 'I'm alive' ping from a station, sent on a fixed interval
+    even when no runner is nearby. Carries the station's flash-buffer depth so
+    a growing backlog (server reachable but DB struggling, say) is visible."""
+    conn = get_db()
+    touch_station(conn.cursor(), hb.station_id, queued=hb.queued, source="heartbeat")
+    conn.commit(); conn.close()
+    return {"status": "ok"}
+
+
+@app.get("/api/stations/status")
+def stations_status():
+    """Per-station liveness for the dashboard: one row per configured station,
+    whether or not it has ever reported, with seconds since its last contact and
+    an `online` flag (within STATION_OFFLINE_SECONDS)."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT s.id, s.name, st.last_seen, st.queued, st.source "
+        "FROM stations s LEFT JOIN station_status st ON st.station_id = s.id "
+        "ORDER BY s.id"
+    ).fetchall()
+    conn.close()
+
+    now = datetime.now()
+    out = []
+    for r in rows:
+        secs = None
+        if r["last_seen"]:
+            try:
+                secs = max(0, (now - datetime.fromisoformat(r["last_seen"])).total_seconds())
+            except ValueError:
+                secs = None
+        out.append({
+            "id":          r["id"],
+            "name":        r["name"],
+            "last_seen":   r["last_seen"],
+            "seconds_ago": round(secs) if secs is not None else None,
+            "online":      secs is not None and secs <= STATION_OFFLINE_SECONDS,
+            "queued":      r["queued"] if r["queued"] is not None else 0,
+            "source":      r["source"],
+        })
+    return {"offline_after_s": STATION_OFFLINE_SECONDS, "stations": out}
 
 
 # runner management

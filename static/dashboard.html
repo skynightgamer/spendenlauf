@@ -277,6 +277,45 @@
   }
   .leaflet-popup-content { font-size: 0.85rem; }
 
+  /* ── Station status strip ────────────────────── */
+  /* At-a-glance liveness for each checkpoint so a volunteer can spot a station
+     that has gone dark (lost power / Wi-Fi) without reading the map. */
+  .stations-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-bottom: 1.4rem;
+  }
+  .st-chip {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.5rem 0.8rem;
+    font-size: 0.82rem;
+    min-width: 0;
+  }
+  .st-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    background: var(--text-dim);
+  }
+  .st-chip.online  .st-dot { background: var(--accent); animation: pulse 2s infinite; }
+  .st-chip.offline .st-dot { background: var(--danger); }
+  .st-chip.offline { border-color: var(--danger); }
+  .st-chip.never   .st-dot { background: var(--text-dim); }
+  .st-name { font-weight: 600; }
+  .st-meta { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+  .st-chip.offline .st-meta { color: var(--danger); }
+  .st-queued {
+    color: var(--gold);
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+  }
+
   /* ── Footer ──────────────────────────────────── */
   footer {
     text-align: center;
@@ -319,6 +358,9 @@
       </div>
     </div>
 
+    <!-- Station liveness: green = reporting, red = gone dark -->
+    <div class="stations-strip" id="stations-strip"></div>
+
     <!-- Leaderboard left, map right -->
     <div class="main-grid">
       <!-- Leaderboard -->
@@ -329,7 +371,7 @@
 
       <!-- Course map -->
       <div class="panel course-panel">
-        <div class="panel-title">Karte — Top 10 Läufer</div>
+        <div class="panel-title">Karte — Alle Läufer</div>
         <div id="course-map"></div>
         <div class="map-empty" id="map-empty" style="display:none;">
           Stationen noch nicht platziert.<br>
@@ -489,6 +531,30 @@
     el.innerHTML = html;
   }
 
+  function renderStations(data) {
+    const el = document.getElementById('stations-strip');
+    const stations = (data && data.stations) || [];
+    if (!stations.length) { el.innerHTML = ''; return; }
+
+    el.innerHTML = stations.map(s => {
+      let cls, meta;
+      if (s.seconds_ago == null) {
+        cls = 'never';  meta = 'noch nie';
+      } else if (s.online) {
+        cls = 'online'; meta = `vor ${timeAgo(s.last_seen)}`;
+      } else {
+        cls = 'offline'; meta = `⚠ seit ${timeAgo(s.last_seen)} offline`;
+      }
+      const q = s.queued > 0 ? `<span class="st-queued">⏳ ${s.queued} gepuffert</span>` : '';
+      return `<div class="st-chip ${cls}">
+        <span class="st-dot"></span>
+        <span class="st-name">${esc(s.name)}</span>
+        <span class="st-meta">${meta}</span>
+        ${q}
+      </div>`;
+    }).join('');
+  }
+
   function renderStats(s) {
     document.getElementById('s-laps').textContent    = s.total_laps;
     document.getElementById('s-dist').textContent    = s.total_distance_km.toFixed(1);
@@ -529,12 +595,12 @@
     });
   }
 
-  // Show the current top 10 runners as pins at the station they last passed.
-  // Markers persist across refreshes and are repositioned with setLatLng so they
-  // glide to the new station (CSS transition) instead of blinking out and back.
+  // Show every runner as a pin at the station they last passed. Markers persist
+  // across refreshes and are repositioned with setLatLng so they glide to the
+  // new station (CSS transition) instead of blinking out and back.
   function renderRunnerPins(rows) {
     if (!map) return;
-    const top = rows.slice(0, 10).filter(r => r.last_station_id && stationCoords[r.last_station_id]);
+    const top = rows.filter(r => r.last_station_id && stationCoords[r.last_station_id]);
     const seen = {};       // station id → how many pins already placed there
     const stillHere = new Set();
 
@@ -542,9 +608,14 @@
       const base = stationCoords[r.last_station_id];
       const k = seen[r.last_station_id] = (seen[r.last_station_id] || 0);
       seen[r.last_station_id]++;
-      // Fan multiple runners at one station around it so pins don't fully overlap.
-      const ang = k * (Math.PI / 3);
-      const rad = k === 0 ? 0 : 0.00016;
+      // Fan multiple runners at one station onto concentric rings (centre + rings
+      // of 6) so even a bunched start stays readable instead of stacking pins.
+      const PER_RING = 6;
+      const ring = k === 0 ? 0 : Math.floor((k - 1) / PER_RING) + 1;
+      const inRing = (k - 1) % PER_RING;
+      // Offset alternate rings by half a step so outer pins sit between inner ones.
+      const ang = inRing * (2 * Math.PI / PER_RING) + (ring % 2) * (Math.PI / PER_RING);
+      const rad = ring * 0.00018;
       const pos = [base[0] + rad * Math.cos(ang), base[1] + rad * Math.sin(ang)];
       const popup = `<b>${r.name}</b><br>Platz ${idx + 1} · ${r.laps} Runden · S${r.last_station_id}`;
 
@@ -573,12 +644,14 @@
 
   async function refresh() {
     try {
-      const [lb, st] = await Promise.all([
+      const [lb, st, ss] = await Promise.all([
         fetch(`${API}/api/leaderboard`).then(r => r.json()),
         fetch(`${API}/api/stats`).then(r => r.json()),
+        fetch(`${API}/api/stations/status`).then(r => r.json()),
       ]);
       renderLeaderboard(lb);
       renderStats(st);
+      renderStations(ss);
       renderCourseMap(lb);
       renderRunnerPins(lb);
     } catch (err) {
