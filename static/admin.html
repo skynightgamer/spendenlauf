@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Spendenlauf — Admin</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <!-- Apply saved theme before paint so there is no light flash on dark mode. -->
 <script>
   (function () {
@@ -73,6 +74,10 @@
   button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
   button.active  { background: var(--accent-2); color: #fff; border-color: var(--accent-2); }
   button.danger  { color: var(--danger); }
+  button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
 
   .hidden { display: none !important; }
 
@@ -97,7 +102,7 @@
   .field { margin-bottom: 1rem; }
   .field label { display: block; font-size: 0.78rem; color: var(--text-dim);
                  text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.3rem; }
-  input[type=text], input[type=password], input[type=number] {
+  input[type=text], input[type=password], input[type=number], input[type=datetime-local] {
     width: 100%; padding: 0.6rem 0.7rem; border-radius: var(--radius);
     border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.95rem;
   }
@@ -154,14 +159,20 @@
   }
 
   /* ── Runner config ──────────────────────────── */
-  #tab-runners, #tab-beacons { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 1.4rem; }
+  #tab-runners, #tab-beacons, #tab-run { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 1.4rem; }
+  .run-status {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 0.9rem 1.1rem; font-size: 0.92rem;
+  }
+  .run-status.running { border-color: var(--accent); }
+  .run-status b { font-weight: 700; }
   .runners-wrap { max-width: 1000px; margin: 0 auto; }
   .runner-form, .beacon-form {
     display: grid; gap: 0.6rem; align-items: end;
     background: var(--surface); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 1rem;
   }
-  .runner-form { grid-template-columns: 1fr 1fr 0.8fr 0.9fr auto; }
+  .runner-form { grid-template-columns: 1fr 1fr 0.8fr 0.9fr 0.9fr auto; }
   .beacon-form { grid-template-columns: 0.8fr 1.2fr auto; }
   @media (max-width: 800px) {
     .runner-form, .beacon-form { grid-template-columns: 1fr 1fr; }
@@ -191,6 +202,12 @@
   .runners-table .actions { display: flex; gap: 0.4rem; }
   .runners-table .actions button { padding: 0.4rem 0.6rem; }
   .empty-runners { padding: 2rem 1rem; text-align: center; color: var(--text-dim); }
+
+  /* ── Past runs ──────────────────────────────── */
+  .run-detail { padding: 0.6rem 0 0.4rem; }
+  .run-detail-totals { display: flex; flex-wrap: wrap; gap: 1.2rem; margin: 0.5rem 0 0.9rem;
+                       font-size: 0.9rem; color: var(--text-dim); }
+  .run-detail-totals b { color: var(--text); font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -223,14 +240,58 @@
   <!-- Editor -->
   <div id="editor-view" style="display:none;">
     <nav class="subtabs">
-      <button id="tab-btn-map" class="active" data-tab="map">Karten-Konfiguration</button>
+      <button id="tab-btn-run" class="active" data-tab="run">Lauf-Steuerung</button>
+      <button id="tab-btn-map" data-tab="map">Karten-Konfiguration</button>
       <button id="tab-btn-runners" data-tab="runners">Läufer-Konfiguration</button>
       <button id="tab-btn-beacons" data-tab="beacons">Beacon-Konfiguration</button>
       <button id="tab-btn-settings" data-tab="settings">Einstellungen</button>
     </nav>
 
+    <!-- Run control -->
+    <div id="tab-run">
+      <div class="runners-wrap">
+        <div class="section-title">Lauf-Steuerung</div>
+        <div class="run-status" id="run-status">…</div>
+        <div class="btn-row" style="margin:1.1rem 0;">
+          <button id="run-start-btn" class="primary">▶ Neuen Lauf starten</button>
+          <button id="run-end-btn" disabled>■ Lauf beenden</button>
+        </div>
+        <div class="hint">
+          <strong>Neuen Lauf starten</strong> löscht alle Daten des vorherigen Laufs
+          (Läufer, Beacons, Runden) und beginnt jetzt bei null — der vorherige Lauf
+          wird vorher automatisch unter „Vergangene Läufe“ gesichert. Vor dem Start
+          werden alle Scans ignoriert, danach beginnt jeder Läufer mit seinem ersten Scan.<br>
+          <strong>Lauf beenden</strong> setzt die echte Endzeit auf jetzt und sichert
+          den Lauf. Spätere Scans zählen nicht mehr.
+        </div>
+
+        <div class="section-title">Einstellungen für diesen Lauf</div>
+        <form class="runner-form" id="run-form">
+          <div class="field">
+            <label for="cf-goal">Spendenziel (€)</label>
+            <input type="number" id="cf-goal" min="0" max="1000000" step="1">
+          </div>
+          <div class="field">
+            <label for="cf-end">Geplante Endzeit</label>
+            <input type="datetime-local" id="cf-end">
+          </div>
+          <button type="submit" class="primary">Speichern</button>
+        </form>
+        <div class="hint" style="margin-top:1rem;">
+          <strong>Geplante Endzeit:</strong> nur für die Spenden-Hochrechnung auf dem
+          Dashboard (leer = keine Hochrechnung). Die echte Endzeit wird gesetzt, wenn du
+          „Lauf beenden“ drückst.<br>
+          <strong>Spendenziel:</strong> Zielbetrag für den Fortschrittsbalken (0 = ausgeblendet).
+        </div>
+        <div class="status" id="run-form-status"></div>
+
+        <div class="section-title">Vergangene Läufe</div>
+        <div id="past-runs"></div>
+      </div>
+    </div>
+
     <!-- Map config -->
-    <div class="editor" id="tab-map">
+    <div class="editor hidden" id="tab-map">
     <div class="sidebar">
       <div class="section-title">Stationen</div>
       <div class="hint">Ziehe die nummerierten Marker auf der Karte an ihren Standort. Namen können hier geändert werden.</div>
@@ -273,6 +334,10 @@
           <div class="field">
             <label for="rf-don">Spende €/km</label>
             <input type="text" id="rf-don" inputmode="decimal" value="0">
+          </div>
+          <div class="field">
+            <label for="rf-team">Team / Klasse</label>
+            <input type="text" id="rf-team" placeholder="z. B. 8b">
           </div>
           <button type="submit" class="primary">+ Hinzufügen</button>
         </form>
@@ -335,7 +400,8 @@
           <strong>Anzahl Stationen:</strong> nur vor dem Lauf ändern — eine Änderung während des Laufs verfälscht laufende Runden.<br>
           <strong>Stations-Cooldown:</strong> Mindestabstand zwischen zwei gewerteten Scans derselben Station.<br>
           <strong>Rundenlänge:</strong> wird nur verwendet, wenn keine Strecke auf der Karte gezeichnet wurde.<br>
-          <strong>Pausen-Schwelle:</strong> Lücken zwischen Scans, die länger sind, gelten als Pause und zählen nicht zum Tempo.
+          <strong>Pausen-Schwelle:</strong> Lücken zwischen Scans, die länger sind, gelten als Pause und zählen nicht zum Tempo.<br>
+          Spendenziel, Start- und Endzeit findest du unter <strong>Lauf-Steuerung</strong>.
         </div>
         <div class="status" id="settings-status"></div>
       </div>
@@ -399,6 +465,7 @@
     editorView.style.display = 'flex';
     logoutBtn.style.display = 'inline-block';
     await buildEditor();
+    loadRun();        // run-control is the default tab
     loadRunners();
   }
 
@@ -619,6 +686,7 @@
 
   // ── Sub-tabs ──────────────────────────────────
   const TABS = {
+    run:      { panel: 'tab-run',      btn: 'tab-btn-run' },
     map:      { panel: 'tab-map',      btn: 'tab-btn-map' },
     runners:  { panel: 'tab-runners',  btn: 'tab-btn-runners' },
     beacons:  { panel: 'tab-beacons',  btn: 'tab-btn-beacons' },
@@ -633,6 +701,7 @@
     });
     // Leaflet needs a nudge once its container becomes visible again.
     if (tab === 'map' && map) setTimeout(() => map.invalidateSize(), 0);
+    if (tab === 'run') loadRun();
     if (tab === 'runners') loadRunners();
     if (tab === 'beacons') loadBeacons();
     if (tab === 'settings') loadSettings();
@@ -693,7 +762,7 @@
       return;
     }
     let html = `<table class="runners-table"><thead><tr>
-      <th>Vorname</th><th>Nachname</th><th>Startnummer</th><th>€/km</th><th></th>
+      <th>Vorname</th><th>Nachname</th><th>Startnummer</th><th>€/km</th><th>Team / Klasse</th><th></th>
     </tr></thead><tbody>`;
     runners.forEach(r => {
       html += `<tr data-bib="${r.bib_number}">
@@ -701,6 +770,7 @@
         <td><input type="text" class="e-nachname" value="${esc(r.nachname)}"></td>
         <td><select class="e-bib">${bibOptions(r.bib_number, r.bib_number)}</select></td>
         <td><input type="text" class="e-don" inputmode="decimal" value="${esc(r.donation_per_km)}"></td>
+        <td><input type="text" class="e-team" value="${esc(r.team || '')}"></td>
         <td><div class="actions">
           <button class="save-runner primary">Speichern</button>
           <button class="del-runner danger">Löschen</button>
@@ -725,6 +795,7 @@
       nachname:        document.getElementById('rf-nachname').value.trim(),
       bib_number:      bib,
       donation_per_km: parseAmount(document.getElementById('rf-don').value),
+      team:            document.getElementById('rf-team').value.trim(),
     };
     const res = await fetch(`${API}/api/runners`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -749,6 +820,7 @@
       nachname:        row.querySelector('.e-nachname').value.trim(),
       bib_number:      Number(row.querySelector('.e-bib').value),
       donation_per_km: parseAmount(row.querySelector('.e-don').value),
+      team:            row.querySelector('.e-team').value.trim(),
     };
     const res = await fetch(`${API}/api/runners/${bib}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -923,6 +995,194 @@
       el.textContent = `Fehler: ${data.detail || 'Speichern fehlgeschlagen.'}`;
     }
   });
+
+  // ── Run control ───────────────────────────────
+  function runStatusMsg(msg, ok) {
+    const el = document.getElementById('run-form-status');
+    el.className = 'status ' + (ok ? 'ok' : 'err');
+    el.textContent = msg;
+  }
+
+  function renderRunStatus(cfg) {
+    const el = document.getElementById('run-status');
+    const endBtn = document.getElementById('run-end-btn');
+    endBtn.disabled = !cfg.event_start || !!cfg.event_stopped;
+    if (cfg.event_stopped) {
+      el.className = 'run-status';
+      const stopped = new Date(cfg.event_stopped).toLocaleString('de-DE');
+      el.innerHTML = `Lauf beendet: <b>${stopped}</b> — Ergebnisse sind final. ` +
+        `„Neuen Lauf starten“ sichert und setzt alles zurück.`;
+    } else if (cfg.event_start) {
+      el.className = 'run-status running';
+      const start = new Date(cfg.event_start).toLocaleString('de-DE');
+      const end = cfg.event_end
+        ? ` · geplante Endzeit: <b>${new Date(cfg.event_end).toLocaleString('de-DE')}</b>` : '';
+      el.innerHTML = `Lauf läuft seit: <b>${start}</b>${end}`;
+    } else {
+      el.className = 'run-status';
+      el.innerHTML = 'Lauf noch nicht gestartet — Scans werden ignoriert, bis du startest.';
+    }
+  }
+
+  async function loadRun() {
+    const res = await fetch(`${API}/api/config`);
+    if (!res.ok) return;
+    const cfg = await res.json();
+    document.getElementById('cf-goal').value  = cfg.donation_goal;
+    document.getElementById('cf-end').value   = cfg.event_end || '';
+    renderRunStatus(cfg);
+    loadPastRuns();
+  }
+
+  async function putConfig(body) {
+    const res = await fetch(`${API}/api/config`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 401) {
+      runStatusMsg('Sitzung abgelaufen — bitte neu anmelden.', false);
+      setTimeout(() => location.reload(), 1500);
+      return null;
+    }
+    return res;
+  }
+
+  async function postRun(path) {
+    const res = await fetch(`${API}${path}`, { method: 'POST' });
+    if (res.status === 401) {
+      runStatusMsg('Sitzung abgelaufen — bitte neu anmelden.', false);
+      setTimeout(() => location.reload(), 1500);
+      return null;
+    }
+    return res;
+  }
+
+  document.getElementById('run-start-btn').addEventListener('click', async () => {
+    if (!confirm('Neuen Lauf starten?\n\nAlle Daten des aktuellen Laufs (Läufer, ' +
+      'Beacons, Runden) werden gelöscht und unter „Vergangene Läufe“ gesichert. ' +
+      'Ab jetzt beginnt ein neuer Lauf bei null.')) return;
+    const res = await postRun('/api/run/start');
+    if (res && res.ok) {
+      runStatusMsg('✔ Neuer Lauf gestartet.', true);
+      loadRun(); loadRunners(); loadBeacons();
+    } else if (res) runStatusMsg('Start fehlgeschlagen.', false);
+  });
+
+  document.getElementById('run-end-btn').addEventListener('click', async () => {
+    if (!confirm('Lauf beenden? Die echte Endzeit wird auf jetzt gesetzt und der ' +
+      'Lauf gesichert. Spätere Scans zählen nicht mehr.')) return;
+    const res = await postRun('/api/run/end');
+    if (res && res.ok) { runStatusMsg('✔ Lauf beendet und gesichert.', true); loadRun(); }
+    else if (res) runStatusMsg('Beenden fehlgeschlagen.', false);
+  });
+
+  document.getElementById('run-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const res = await putConfig({
+      donation_goal: parseFloat(document.getElementById('cf-goal').value) || 0,
+      event_end:     document.getElementById('cf-end').value || '',
+    });
+    if (res && res.ok) { runStatusMsg('✔ Gespeichert.', true); loadRun(); }
+    else if (res) {
+      const d = await res.json().catch(() => ({}));
+      runStatusMsg(`Fehler: ${d.detail || 'Speichern fehlgeschlagen.'}`, false);
+    }
+  });
+
+  // ── Past runs ─────────────────────────────────
+  function fmtDateTime(iso) {
+    return iso ? new Date(iso).toLocaleString('de-DE') : '—';
+  }
+
+  async function loadPastRuns() {
+    const el = document.getElementById('past-runs');
+    const res = await fetch(`${API}/api/runs`);
+    if (!res.ok) { el.innerHTML = ''; return; }
+    const runs = await res.json();
+    if (!runs.length) {
+      el.innerHTML = '<div class="empty-runners">Noch keine vergangenen Läufe gesichert.</div>';
+      return;
+    }
+    let html = `<table class="runners-table"><thead><tr>
+      <th>Lauf</th><th>Beendet</th><th>Läufer</th><th>Distanz</th><th>Spenden</th><th></th>
+    </tr></thead><tbody>`;
+    runs.forEach(r => {
+      html += `<tr data-run="${r.id}">
+        <td>${esc(r.label)}</td>
+        <td>${esc(fmtDateTime(r.ended_at))}</td>
+        <td class="laps-col">${r.total_runners ?? '—'}</td>
+        <td class="laps-col">${r.total_distance_km != null ? r.total_distance_km.toFixed(1) + ' km' : '—'}</td>
+        <td class="laps-col">${r.total_donations != null ? '€' + r.total_donations.toFixed(2) : '—'}</td>
+        <td><div class="actions">
+          <button class="show-run primary">Details</button>
+          <button class="del-run danger">Löschen</button>
+        </div></td>
+      </tr>
+      <tr class="run-detail-row hidden" data-detail="${r.id}"><td colspan="6"></td></tr>`;
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+
+    el.querySelectorAll('.show-run').forEach(b => b.addEventListener('click', toggleRunDetail));
+    el.querySelectorAll('.del-run').forEach(b => b.addEventListener('click', deletePastRun));
+  }
+
+  async function toggleRunDetail(e) {
+    const id = e.target.closest('tr').dataset.run;
+    const detailRow = document.querySelector(`tr[data-detail="${id}"]`);
+    const cell = detailRow.querySelector('td');
+    if (!detailRow.classList.contains('hidden')) {
+      detailRow.classList.add('hidden');
+      return;
+    }
+    if (!cell.dataset.loaded) {
+      cell.innerHTML = 'Lädt…';
+      const res = await fetch(`${API}/api/runs/${id}`);
+      if (!res.ok) { cell.innerHTML = 'Fehler beim Laden.'; }
+      else { cell.innerHTML = renderRunDetail(await res.json()); cell.dataset.loaded = '1'; }
+    }
+    detailRow.classList.remove('hidden');
+  }
+
+  function renderRunDetail(run) {
+    const d = run.data || {};
+    const s = d.stats || {};
+    const lb = d.leaderboard || [];
+    let html = `<div class="run-detail">`;
+    html += `<div class="hint">Gestartet: ${esc(fmtDateTime(run.started_at))} · ` +
+            `Beendet: ${esc(fmtDateTime(run.ended_at))}</div>`;
+    html += `<div class="run-detail-totals">
+      <span><b>${s.total_runners ?? '—'}</b> Läufer</span>
+      <span><b>${s.total_laps ?? '—'}</b> Runden</span>
+      <span><b>${s.total_distance_km != null ? s.total_distance_km.toFixed(1) : '—'} km</b></span>
+      <span><b>€${s.total_donations != null ? s.total_donations.toFixed(2) : '—'}</b></span>
+    </div>`;
+    if (lb.length) {
+      html += `<table class="runners-table"><thead><tr>
+        <th>Läufer</th><th>Nr.</th><th>Team</th><th>Runden</th><th>Distanz</th><th>Spenden</th>
+      </tr></thead><tbody>`;
+      lb.forEach(r => {
+        html += `<tr>
+          <td>${esc(r.name)}</td>
+          <td class="laps-col">${esc(r.bib_number)}</td>
+          <td>${esc(r.team || '')}</td>
+          <td class="laps-col">${r.laps}</td>
+          <td class="laps-col">${r.distance_km != null ? r.distance_km.toFixed(2) + ' km' : '—'}</td>
+          <td class="laps-col">${r.donations != null ? '€' + r.donations.toFixed(2) : '—'}</td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  async function deletePastRun(e) {
+    const id = e.target.closest('tr').dataset.run;
+    if (!confirm('Diesen gesicherten Lauf wirklich löschen?')) return;
+    const res = await fetch(`${API}/api/runs/${id}`, { method: 'DELETE' });
+    if (res.ok) loadPastRuns();
+  }
 
   checkAuth();
 </script>

@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Spendenlauf — Live Tracker</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <!-- Apply saved theme before paint so there is no light flash on dark mode. -->
 <script>
   (function () {
@@ -121,6 +122,15 @@
     0%, 100% { opacity: 1; transform: scale(1); }
     50%      { opacity: .4; transform: scale(1.4); }
   }
+
+  /* Final-result banner, shown when the run has been stopped. */
+  .finished-banner {
+    display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+    background: var(--green); color: #fff;
+    padding: 0.7rem 1rem; font-weight: 700; font-size: 0.98rem;
+    letter-spacing: 0.02em;
+  }
+  .finished-banner #finished-when { font-weight: 500; opacity: 0.9; }
 
   /* ── Layout ──────────────────────────────────── */
   /* Everything lives on one continuous sheet — no gaps, no rounded corners.
@@ -337,6 +347,9 @@
     border-color: var(--green);
   }
   .leaflet-popup-content { font-size: 0.85rem; }
+  /* Stop a double-tap on the +/- buttons from triggering the browser's
+     double-tap-to-zoom on the whole page (mobile). */
+  .leaflet-control-zoom a { touch-action: manipulation; }
 
   /* ── Station status strip ────────────────────── */
   /* At-a-glance liveness for each checkpoint so a volunteer can spot a station
@@ -382,6 +395,154 @@
     font-size: 0.72rem;
     font-variant-numeric: tabular-nums;
   }
+  /* On phones, stop cramming every chip into one row (flex-basis 0 keeps them
+     from ever wrapping, so they shrink below their text and overlap). Give each
+     a real minimum width so they wrap onto multiple rows instead. */
+  @media (max-width: 800px) {
+    .st-chip { flex: 1 1 45%; }
+  }
+
+  /* Sections below are toggled with the [hidden] attribute; their display rules
+     (flex/grid) would otherwise win over the UA hidden rule, so force it. */
+  [hidden] { display: none !important; }
+
+  /* ── Donation goal thermometer ───────────────── */
+  .goal-bar {
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    padding: 0.9rem 1.1rem;
+  }
+  .goal-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 0.78rem; color: var(--text-dim); margin-bottom: 0.5rem;
+  }
+  .goal-title { text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; }
+  .goal-amount { font-variant-numeric: tabular-nums; }
+  .goal-amount b { color: var(--orange); font-size: 1.05rem; }
+  .goal-track {
+    position: relative; height: 22px;
+    background: #f1f3f5; border: 1px solid var(--border); overflow: hidden;
+  }
+  .goal-fill {
+    height: 100%; width: 0%; background: var(--orange);
+    transition: width 0.8s ease;
+  }
+  .goal-pct {
+    position: absolute; top: 50%; left: 0.5rem; transform: translateY(-50%);
+    font-size: 0.75rem; font-weight: 700;
+    /* White over the orange fill; a faint shadow keeps it legible on the small
+       slice of empty track at very low percentages. */
+    color: #fff; text-shadow: 0 0 2px rgba(0,0,0,0.45);
+    font-variant-numeric: tabular-nums;
+  }
+  /* Where the projected final total lands on the same scale. */
+  .goal-proj { position: absolute; top: -1px; bottom: -1px; width: 2px; background: var(--blue); }
+  :root[data-theme="dark"] .goal-track { background: #222b36; }
+  /* Projection folded into the goal box (#1). */
+  .goal-proj-text { margin-top: 0.5rem; font-size: 0.82rem; color: var(--text-dim); }
+  .goal-proj-text b { color: var(--blue); font-variant-numeric: tabular-nums; }
+
+  /* ── Records spotlight (rotates through superlatives) ── */
+  .records {
+    display: flex; align-items: baseline; gap: 0.6rem;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 0.6rem 1.1rem;
+  }
+  .rec-label {
+    font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--text-dim); flex: 0 0 auto;
+  }
+  .rec-name  { font-weight: 700; }
+  .rec-value { font-variant-numeric: tabular-nums; margin-left: auto; }
+  .rec-value.c-green  { color: var(--green); }
+  .rec-value.c-blue   { color: var(--blue); }
+  .rec-value.c-orange { color: var(--orange); }
+
+  /* ── Audience / Ops view (#4) ───────────────────── */
+  /* Ops view hides audience fluff so volunteers see only hardware health. */
+  body.mode-ops .goal-bar,
+  body.mode-ops .records { display: none !important; }
+
+  /* ── Leaderboard tabs (Einzel / Teams) ───────── */
+  .lb-tabs { display: flex; border-bottom: 1px solid var(--border); }
+  .lb-tab {
+    font-family: inherit; cursor: pointer;
+    background: transparent; border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-dim);
+    font-size: 0.8rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 0.8rem 1.1rem;
+  }
+  .lb-tab:hover { color: var(--text); }
+  .lb-tab.active { color: var(--text); border-bottom-color: var(--green); }
+
+  /* Clickable runner rows in the Einzel leaderboard. */
+  tr.clickable { cursor: pointer; }
+  .team-tag {
+    display: inline-block; font-size: 0.72rem; font-weight: 600;
+    padding: 0.1rem 0.4rem; color: var(--text-dim);
+    background: #f1f3f5; border-radius: var(--radius);
+  }
+  :root[data-theme="dark"] .team-tag { background: #222b36; }
+
+  /* ── Runner detail modal ─────────────────────── */
+  .modal-overlay {
+    position: fixed; inset: 0; z-index: 2000;
+    background: rgba(0,0,0,0.5);
+    display: flex; align-items: center; justify-content: center;
+    padding: 1rem;
+  }
+  .modal {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    width: 100%; max-width: 480px;
+    max-height: 88vh; overflow-y: auto;
+    padding: 1.4rem 1.6rem;
+  }
+  .modal-close {
+    position: absolute; top: 0.6rem; right: 0.6rem;
+    background: transparent; border: none; cursor: pointer;
+    color: var(--text-dim); font-size: 1.1rem; line-height: 1;
+    padding: 0.3rem;
+  }
+  .modal-close:hover { color: var(--text); }
+  .m-name { font-size: 1.3rem; font-weight: 800; letter-spacing: -0.02em; }
+  .m-sub { color: var(--text-dim); font-size: 0.85rem; margin-top: 0.15rem;
+           display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+  .m-grid {
+    display: grid; grid-template-columns: repeat(2, 1fr);
+    border-top: 1px solid var(--border); border-left: 1px solid var(--border);
+    margin: 1.1rem 0;
+  }
+  .m-cell {
+    border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+    padding: 0.7rem 0.8rem;
+  }
+  .m-cell .v { font-size: 1.25rem; font-weight: 800; letter-spacing: -0.02em; }
+  .m-cell .l { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.07em;
+               color: var(--text-dim); margin-top: 0.15rem; }
+  .m-cell.laps .v  { color: var(--green); }
+  .m-cell.dist .v  { color: var(--blue); }
+  .m-cell.money .v { color: var(--orange); }
+  .m-cell.pace .v  { color: var(--blue); }
+  .m-meta { font-size: 0.82rem; color: var(--text-dim); line-height: 1.7; }
+  .m-meta b { color: var(--text); font-weight: 600; }
+  .m-splits-title {
+    font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--text-dim); margin: 1.1rem 0 0.5rem;
+  }
+  .m-splits { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  .m-splits td { padding: 0.35rem 0.4rem; border-bottom: 1px solid var(--border); }
+  .m-splits td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .m-splits tr.best td { color: var(--green); font-weight: 700; }
+  .m-empty { color: var(--text-dim); font-size: 0.85rem; }
 
   /* ── Footer ──────────────────────────────────── */
   footer {
@@ -401,12 +562,18 @@
   <header>
     <h1><span class="t-blue">Spen</span><span class="t-green">den</span><span class="t-orange">lauf</span></h1>
     <div class="header-right">
-      <div class="subtitle"><span class="live-dot"></span>Live Tracker (3s)</div>
+      <div class="subtitle" id="subtitle"><span class="live-dot"></span>Live Tracker (3s)</div>
+      <button class="theme-toggle" id="view-toggle" aria-label="Ansicht wechseln" title="Publikum / Technik">Technik</button>
       <button class="theme-toggle" id="theme-toggle" aria-label="Design wechseln" title="Hell/Dunkel">◐</button>
     </div>
   </header>
 
   <div class="container">
+    <!-- Shown once the run has been stopped: final-result banner. -->
+    <div class="finished-banner" id="finished-banner" hidden>
+      🏁 Lauf beendet — Endergebnis<span id="finished-when"></span>
+    </div>
+
     <!-- Stats row -->
     <div class="stats">
       <div class="stat-card laps">
@@ -421,14 +588,32 @@
         <div class="value" id="s-money">—</div>
         <div class="label">Spenden €</div>
       </div>
-      <div class="stat-card">
-        <div class="value" id="s-runners">—</div>
-        <div class="label">Aktive Läufer</div>
-      </div>
       <div class="stat-card pace">
         <div class="value" id="s-pace">—</div>
         <div class="label">Ø Pace</div>
       </div>
+    </div>
+
+    <!-- Donation goal thermometer with the projection folded in (#1).
+         Shown when a goal is set, or (no-goal) just the projection caption. -->
+    <div class="goal-bar" id="goal-bar" hidden>
+      <div class="goal-head">
+        <span class="goal-title">Spendenziel</span>
+        <span class="goal-amount" id="goal-amount"></span>
+      </div>
+      <div class="goal-track" id="goal-track">
+        <div class="goal-fill" id="goal-fill"></div>
+        <div class="goal-proj" id="goal-proj" hidden></div>
+        <span class="goal-pct" id="goal-pct"></span>
+      </div>
+      <div class="goal-proj-text" id="goal-proj-text" hidden></div>
+    </div>
+
+    <!-- Records spotlight: one rotating superlative (#2) -->
+    <div class="records" id="records" hidden>
+      <span class="rec-label" id="rec-label"></span>
+      <span class="rec-name"  id="rec-name"></span>
+      <span class="rec-value" id="rec-value"></span>
     </div>
 
     <!-- Station liveness: green = reporting, red = gone dark -->
@@ -436,10 +621,14 @@
 
     <!-- Leaderboard left, map right -->
     <div class="main-grid">
-      <!-- Leaderboard -->
+      <!-- Leaderboard (Einzel / Teams tabs share this panel) -->
       <div class="panel" id="leaderboard-panel">
-        <div class="panel-title">Bestenliste</div>
+        <div class="lb-tabs">
+          <button class="lb-tab active" data-lb="single">Einzel</button>
+          <button class="lb-tab" data-lb="team" hidden>Teams</button>
+        </div>
         <div id="leaderboard-body"></div>
+        <div id="team-body" hidden></div>
       </div>
 
       <!-- Course map -->
@@ -458,6 +647,14 @@
     <div>Powered by <span>ESP32 + BLE</span></div>
     <a href="/admin" style="color:var(--text-dim)">Admin</a>
   </footer>
+
+  <!-- Per-runner detail (opened by clicking a row in the Einzel leaderboard) -->
+  <div class="modal-overlay" id="runner-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true">
+      <button class="modal-close" id="modal-close" aria-label="Schließen">✕</button>
+      <div id="modal-body"></div>
+    </div>
+  </div>
 
 <script>
   // ── Config ────────────────────────────────────
@@ -479,6 +676,24 @@
     syncThemeIcon();
   });
   syncThemeIcon();
+
+  // ── Audience / Ops view toggle (#4) ───────────
+  // Audience = stats/goal/records/leaderboard/map + collapsed station pill.
+  // Ops      = hardware focus: full station strip, no audience fluff.
+  const viewToggle = document.getElementById('view-toggle');
+  let view = 'audience';
+  try { view = localStorage.getItem('view') || 'audience'; } catch (e) {}
+  let lastStations = null;        // last /stations/status payload, for re-render
+  function applyView() {
+    document.body.classList.toggle('mode-ops', view === 'ops');
+    viewToggle.textContent = view === 'ops' ? 'Publikum' : 'Technik';
+    if (lastStations) renderStations(lastStations);
+  }
+  viewToggle.addEventListener('click', () => {
+    view = view === 'ops' ? 'audience' : 'ops';
+    try { localStorage.setItem('view', view); } catch (e) {}
+    applyView();
+  });
 
   // ── Leaflet map setup ─────────────────────────
   let map = null;
@@ -514,6 +729,12 @@
     map = L.map('course-map', {
       scrollWheelZoom: false,
     });
+    // Leaflet focuses the map container on zoom (for keyboard nav). Chrome then
+    // scrolls that focused element into view, snapping the whole page to the map
+    // every time the +/- buttons are clicked. Suppress just the scroll.
+    const mapContainer = map.getContainer();
+    const nativeFocus = mapContainer.focus.bind(mapContainer);
+    mapContainer.focus = opts => nativeFocus(Object.assign({ preventScroll: true }, opts));
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '© OpenStreetMap',
@@ -597,7 +818,7 @@
         ? `<span class="station-badge">S${r.last_station_id}</span>`
         : `<span class="station-badge none">—</span>`;
       const don = r.donations > 0 ? `€${r.donations.toFixed(2)}` : '—';
-      html += `<tr>
+      html += `<tr class="clickable" data-bib="${r.bib_number}">
         <td class="rank ${rankClass(i)}">${i + 1}</td>
         <td><span class="bib">${r.bib_number}</span></td>
         <td>${esc(r.name)}</td>
@@ -611,10 +832,60 @@
 
     html += '</tbody></table>';
     el.innerHTML = html;
+
+    el.querySelectorAll('tr.clickable').forEach(tr =>
+      tr.addEventListener('click', () => openRunner(Number(tr.dataset.bib))));
   }
+
+  // ── Team leaderboard ──────────────────────────
+  function renderTeams(teams) {
+    const el = document.getElementById('team-body');
+    // Hide the Teams tab entirely when no real teams are configured.
+    const real = teams.filter(t => t.team);
+    const tabBtn = document.querySelector('.lb-tab[data-lb="team"]');
+    if (!real.length) {
+      tabBtn.hidden = true;
+      el.innerHTML = '';
+      if (lbView === 'team') setLbView('single');
+      return;
+    }
+    tabBtn.hidden = false;
+
+    let html = `<table><thead><tr>
+      <th>#</th><th>Team</th><th>Läufer</th><th>Runden</th><th>km</th><th>Spende</th>
+    </tr></thead><tbody>`;
+    real.forEach((t, i) => {
+      const don = t.donations > 0 ? `€${t.donations.toFixed(2)}` : '—';
+      html += `<tr>
+        <td class="rank ${rankClass(i)}">${i + 1}</td>
+        <td>${esc(t.team)}</td>
+        <td class="dist-cell">${t.runners}</td>
+        <td class="laps-cell">${t.laps}</td>
+        <td class="dist-cell">${t.distance_km.toFixed(2)}</td>
+        <td class="donation-cell">${don}</td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  }
+
+  // ── Leaderboard tab switching ─────────────────
+  let lbView = 'single';
+  function setLbView(view) {
+    lbView = view;
+    document.getElementById('leaderboard-body').hidden = view !== 'single';
+    document.getElementById('team-body').hidden        = view !== 'team';
+    document.querySelectorAll('.lb-tab').forEach(b =>
+      b.classList.toggle('active', b.dataset.lb === view));
+  }
+  document.querySelectorAll('.lb-tab').forEach(b =>
+    b.addEventListener('click', () => setLbView(b.dataset.lb)));
 
   function renderStations(data) {
     const el = document.getElementById('stations-strip');
+    // Station liveness is hardware health — only shown in the Technik (ops) view,
+    // hidden from the public Publikum view.
+    if (view !== 'ops') { el.innerHTML = ''; return; }
     const stations = (data && data.stations) || [];
     if (!stations.length) { el.innerHTML = ''; return; }
 
@@ -641,9 +912,190 @@
     document.getElementById('s-laps').textContent    = s.total_laps;
     document.getElementById('s-dist').textContent    = s.total_distance_km.toFixed(1);
     document.getElementById('s-money').textContent   = s.total_donations.toFixed(2);
-    document.getElementById('s-runners').textContent = s.active_runners;
     document.getElementById('s-pace').textContent    = fmtPace(s.avg_pace_min_km);
+    renderGoal(s);
+    renderRunState(s);
   }
+
+  // Reflect a stopped run: swap the live indicator for a "finished" state and
+  // reveal the final-result banner. Flips back to live if a new run is started.
+  function renderRunState(s) {
+    const stopped  = !!s.event_stopped;
+    const subtitle = document.getElementById('subtitle');
+    const banner   = document.getElementById('finished-banner');
+    banner.hidden = !stopped;
+    if (stopped) {
+      subtitle.innerHTML = '🏁 Lauf beendet';
+      document.getElementById('finished-when').textContent =
+        ' · ' + new Date(s.event_stopped).toLocaleString('de-DE');
+    } else {
+      subtitle.innerHTML = '<span class="live-dot"></span>Live Tracker (3s)';
+      document.getElementById('finished-when').textContent = '';
+    }
+  }
+
+  function fmtClock(iso) {
+    if (!iso) return '';
+    return new Date(iso).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  // ── Donation goal thermometer + folded-in projection (#1) ──
+  function renderGoal(s) {
+    const el = document.getElementById('goal-bar');
+    const goal = s.donation_goal || 0;
+    const hasProj = s.projected_donations != null || s.projected_distance_km != null;
+    if (goal <= 0 && !hasProj) { el.hidden = true; return; }
+    el.hidden = false;
+
+    const track = document.getElementById('goal-track');
+    const head  = document.getElementById('goal-amount');
+    const title = el.querySelector('.goal-title');
+
+    if (goal > 0) {
+      title.textContent = 'Spendenziel';
+      track.hidden = false; head.hidden = false;
+      const cur = s.total_donations || 0;
+      const pct = Math.min(100, (cur / goal) * 100);
+      document.getElementById('goal-fill').style.width = pct.toFixed(1) + '%';
+      document.getElementById('goal-pct').textContent  = pct.toFixed(0) + '%';
+      head.innerHTML = `<b>€${cur.toFixed(2)}</b> / €${goal.toFixed(2)}`;
+      // Tick showing where the projected final total lands on the same scale.
+      const mark = document.getElementById('goal-proj');
+      if (s.projected_donations != null) {
+        mark.hidden = false;
+        mark.style.left = Math.min(100, (s.projected_donations / goal) * 100).toFixed(1) + '%';
+        mark.title = `Hochrechnung: €${s.projected_donations.toFixed(2)}`;
+      } else {
+        mark.hidden = true;
+      }
+    } else {
+      // No goal set, but there's a projection worth showing.
+      title.textContent = 'Hochrechnung';
+      track.hidden = true; head.hidden = true;
+    }
+
+    // Projection caption, folded into the goal box instead of its own strip.
+    const cap = document.getElementById('goal-proj-text');
+    if (hasProj) {
+      cap.hidden = false;
+      const until = s.event_end ? ` bis ${fmtClock(s.event_end)} Uhr` : '';
+      const parts = [];
+      if (s.projected_donations != null)   parts.push(`<b>€${s.projected_donations.toFixed(2)}</b>`);
+      if (s.projected_distance_km != null) parts.push(`<b>${s.projected_distance_km.toFixed(1)} km</b>`);
+      cap.innerHTML = `Hochrechnung${until}: ${parts.join(' · ')}`;
+    } else {
+      cap.hidden = true;
+    }
+  }
+
+  // ── Records spotlight (#2): one superlative at a time, rotating ──
+  let recordCards = [];
+  let recordIdx = 0;
+
+  function renderRecords(rows) {
+    const el = document.getElementById('records');
+    const ran = rows.filter(r => r.distance_km > 0);
+    if (!ran.length) { recordCards = []; el.hidden = true; return; }
+    const maxBy = (a, f) => a.reduce((x, y) => (f(y) > f(x) ? y : x));
+    const minBy = (a, f) => a.reduce((x, y) => (f(y) < f(x) ? y : x));
+
+    const mostLaps = maxBy(ran, r => r.laps);
+    const farthest = maxBy(ran, r => r.distance_km);
+    const paced    = ran.filter(r => r.pace_min_km > 0);
+    const fastest  = paced.length ? minBy(paced, r => r.pace_min_km) : null;
+    const donors   = ran.filter(r => r.donations > 0);
+    const topDonor = donors.length ? maxBy(donors, r => r.donations) : null;
+
+    recordCards = [
+      ['c-green',  'Meiste Runden',    mostLaps.name, `${mostLaps.laps} Runden`],
+      ['c-blue',   'Weiteste Strecke', farthest.name, `${farthest.distance_km.toFixed(2)} km`],
+      fastest  ? ['c-blue',   'Schnellste Pace', fastest.name,  `${fmtPace(fastest.pace_min_km)} /km`] : null,
+      topDonor ? ['c-orange', 'Top-Spender',     topDonor.name, `€${topDonor.donations.toFixed(2)}`]   : null,
+    ].filter(Boolean);
+
+    el.hidden = false;
+    if (recordIdx >= recordCards.length) recordIdx = 0;
+    showRecord();
+  }
+
+  function showRecord() {
+    if (!recordCards.length) return;
+    const [cls, label, name, value] = recordCards[recordIdx % recordCards.length];
+    document.getElementById('rec-label').textContent = label;
+    document.getElementById('rec-name').textContent  = name;
+    const v = document.getElementById('rec-value');
+    v.textContent = value;
+    v.className = 'rec-value ' + cls;
+  }
+
+  // Rotate the spotlight every 4s.
+  setInterval(() => {
+    if (recordCards.length) {
+      recordIdx = (recordIdx + 1) % recordCards.length;
+      showRecord();
+    }
+  }, 4000);
+
+  // ── Runner detail modal ───────────────────────
+  // Seconds → "M:SS" or "H:MM:SS".
+  function fmtDuration(s) {
+    if (s == null || s < 0) return '—';
+    s = Math.round(s);
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    const pad = n => String(n).padStart(2, '0');
+    return h ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+  }
+
+  async function openRunner(bib) {
+    const modal = document.getElementById('runner-modal');
+    const body  = document.getElementById('modal-body');
+    body.innerHTML = '<div class="m-empty">Lädt…</div>';
+    modal.hidden = false;
+    try {
+      const d = await fetch(`${API}/api/runners/${bib}/detail`).then(r => r.json());
+      renderRunnerModal(d);
+    } catch (e) {
+      body.innerHTML = '<div class="m-empty">Konnte Daten nicht laden.</div>';
+    }
+  }
+
+  function renderRunnerModal(d) {
+    const team = d.team ? `<span class="team-tag">${esc(d.team)}</span>` : '';
+    const st   = d.last_station_id ? `S${d.last_station_id}` : '—';
+    const splits = d.laps_detail || [];
+    const splitsHtml = splits.length
+      ? '<table class="m-splits"><tbody>' + splits.map(s =>
+          `<tr class="${d.best_lap_seconds != null && s.seconds === d.best_lap_seconds ? 'best' : ''}">` +
+          `<td>Runde ${s.lap}</td><td>${fmtDuration(s.seconds)}</td></tr>`).join('') +
+        '</tbody></table>'
+      : '<div class="m-empty">Noch keine vollständige Runde.</div>';
+
+    document.getElementById('modal-body').innerHTML = `
+      <div class="m-name">${esc(d.name)}</div>
+      <div class="m-sub"><span class="bib">${d.bib_number}</span> ${team}</div>
+      <div class="m-grid">
+        <div class="m-cell laps"><div class="v">${d.laps}</div><div class="l">Runden</div></div>
+        <div class="m-cell dist"><div class="v">${d.distance_km.toFixed(2)}</div><div class="l">Kilometer</div></div>
+        <div class="m-cell money"><div class="v">€${d.donations.toFixed(2)}</div><div class="l">Spende</div></div>
+        <div class="m-cell pace"><div class="v">${fmtPace(d.pace_min_km)}</div><div class="l">Ø Pace /km</div></div>
+      </div>
+      <div class="m-meta">
+        <div>Aktuelle Station: <b>${st}</b></div>
+        <div>Zuletzt gesehen: <b>${d.last_seen_time ? 'vor ' + timeAgo(d.last_seen_time) : '—'}</b></div>
+        <div>Geschwindigkeit: <b>${d.speed_kmh ? d.speed_kmh.toFixed(1) + ' km/h' : '—'}</b></div>
+        <div>Laufzeit (netto): <b>${fmtDuration(d.moving_seconds)}</b></div>
+        <div>Schnellste / Ø Runde: <b>${fmtDuration(d.best_lap_seconds)} / ${fmtDuration(d.avg_lap_seconds)}</b></div>
+      </div>
+      <div class="m-splits-title">Rundenzeiten</div>
+      ${splitsHtml}`;
+  }
+
+  function closeRunner() { document.getElementById('runner-modal').hidden = true; }
+  document.getElementById('modal-close').addEventListener('click', closeRunner);
+  document.getElementById('runner-modal').addEventListener('click', e => {
+    if (e.target.id === 'runner-modal') closeRunner();   // click outside the card
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeRunner(); });
 
   function renderCourseMap(rows) {
     if (!map) return;
@@ -726,21 +1178,26 @@
 
   async function refresh() {
     try {
-      const [lb, st, ss] = await Promise.all([
+      const [lb, st, ss, tm] = await Promise.all([
         fetch(`${API}/api/leaderboard`).then(r => r.json()),
         fetch(`${API}/api/stats`).then(r => r.json()),
         fetch(`${API}/api/stations/status`).then(r => r.json()),
+        fetch(`${API}/api/teams`).then(r => r.json()),
       ]);
+      lastStations = ss;
       renderLeaderboard(lb);
       renderStats(st);
       renderStations(ss);
       renderCourseMap(lb);
       renderRunnerPins(lb);
+      renderRecords(lb);
+      renderTeams(tm);
     } catch (err) {
       console.warn('Refresh failed:', err);
     }
   }
 
+  applyView();
   initMap().catch(err => console.warn('Map init failed:', err));
   refresh();
   setInterval(refresh, POLL_MS);
