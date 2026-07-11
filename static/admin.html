@@ -988,6 +988,13 @@
     const data = await res.json().catch(() => ({}));
     if (res.ok) {
       el.className = 'status ok';
+      // A changed station count added/removed markers on the map — reload so
+      // the map tab rebuilds with the correct set of stations.
+      if (newCheckpoints !== loadedCheckpoints) {
+        el.textContent = '✔ Gespeichert. Seite wird neu geladen…';
+        setTimeout(() => location.reload(), 1000);
+        return;
+      }
       el.textContent = '✔ Gespeichert.';
       loadSettings();
     } else {

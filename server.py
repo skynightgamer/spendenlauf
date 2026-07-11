@@ -68,6 +68,7 @@ SESSIONS: dict[str, datetime] = {}
 async def lifespan(app: FastAPI):
     """Startup/shutdown hook"""
     init_db()
+    sync_stations(get_config("checkpoint_count"))
     print("✔ Database initialised")
     print("✔ Dashboard at http://localhost:8000")
     yield
@@ -201,6 +202,27 @@ def init_db():
     if "team" not in cols:
         c.execute("ALTER TABLE runners ADD COLUMN team TEXT NOT NULL DEFAULT ''")
 
+    conn.commit()
+    conn.close()
+
+
+def sync_stations(n: int) -> None:
+    """Make the stations table hold exactly checkpoints 1..n.
+
+    Adds any missing checkpoint (default name, NULL coords so the map spreads it
+    near centre until placed) and drops any station beyond n. Keeps the table —
+    which drives the map markers and the liveness strip — in step with the
+    configurable checkpoint_count.
+    """
+    conn = get_db()
+    c = conn.cursor()
+    for sid in range(1, n + 1):
+        c.execute(
+            "INSERT OR IGNORE INTO stations (id, name) VALUES (?, ?)",
+            (sid, f"Station {sid}"),
+        )
+    c.execute("DELETE FROM stations       WHERE id > ?",         (n,))
+    c.execute("DELETE FROM station_status WHERE station_id > ?", (n,))
     conn.commit()
     conn.close()
 
@@ -494,6 +516,11 @@ def update_config(data: ConfigUpdate, _: bool = Depends(require_admin)):
             raise HTTPException(
                 400, detail=f"{key}: muss zwischen {lo} und {hi} liegen")
         set_setting("cfg_" + key, v)
+
+    # Keep the stations table (map markers + liveness strip) in step with the
+    # configured checkpoint count when it changed.
+    if "checkpoint_count" in fields and fields["checkpoint_count"] is not None:
+        sync_stations(get_config("checkpoint_count"))
     return {"status": "ok", "config": config_payload()}
 
 
@@ -532,6 +559,14 @@ def ingest_scan(scan: ScanEvent, _: bool = Depends(require_station)):
     # most a station can do is backdate within the event window.
     scan_time = datetime.now() - timedelta(seconds=scan.age_s)
     ts_iso = scan_time.isoformat()
+
+    # Reject a station_id outside the configured range (1..checkpoint_count). A
+    # misflashed board (STATION_ID=0) or a stale one left on an id we've since
+    # dropped would otherwise be stored and corrupt the modular lap math.
+    checkpoints = get_config("checkpoint_count")
+    if not (1 <= scan.station_id <= checkpoints):
+        conn.commit(); conn.close()
+        return {"status": "ignored", "reason": "invalid_station"}
 
     # A scan proves the station is alive; refresh its liveness (with its buffer
     # depth) even when this particular event is later ignored as a duplicate.
