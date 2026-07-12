@@ -6,10 +6,10 @@ and reverse-proxying to the app on `127.0.0.1:8000`, managed by **systemd**.
 ## 1. Get the code onto the server
 
 ```bash
-sudo mkdir -p /opt/spendenlauf
-sudo chown "$USER" /opt/spendenlauf
-git clone <your-repo> /opt/spendenlauf
-cd /opt/spendenlauf
+sudo mkdir -p /home/ubuntu/spendenlauf
+sudo chown "$USER" /home/ubuntu/spendenlauf
+git clone <your-repo> /home/ubuntu/spendenlauf
+cd /home/ubuntu/spendenlauf
 
 python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
@@ -26,7 +26,7 @@ cp .env.example .env
 ```
 
 The SQLite database (`spendenlauf.db`) is created automatically on first start,
-next to the app in `/opt/spendenlauf`.
+next to the app in `/home/ubuntu/spendenlauf`.
 
 ## 3. Run command (what systemd will execute)
 
@@ -57,10 +57,10 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-User=www-data
-Group=www-data
-WorkingDirectory=/opt/spendenlauf
-ExecStart=/opt/spendenlauf/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8000
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/spendenlauf
+ExecStart=/home/ubuntu/spendenlauf/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=3
 
@@ -77,8 +77,8 @@ is what the backups in the next section guard against.
 
 > `WorkingDirectory` must point at the app folder so the relative
 > `spendenlauf.db` path and `.env` resolve correctly. Make sure the `User`
-> (e.g. `www-data`) can read the code and write the DB:
-> `sudo chown -R www-data:www-data /opt/spendenlauf`.
+> (e.g. `ubuntu`) can read the code and write the DB:
+> `sudo chown -R ubuntu:ubuntu /home/ubuntu/spendenlauf`.
 
 Enable and start it:
 
@@ -119,12 +119,12 @@ After=spendenlauf.service
 
 [Service]
 Type=oneshot
-User=www-data
-Group=www-data
-WorkingDirectory=/opt/spendenlauf
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/spendenlauf
 # KEEP=288 × 5 min ≈ 24h of history. Tune to taste.
-Environment=APP_DIR=/opt/spendenlauf KEEP=288
-ExecStart=/opt/spendenlauf/backup-db.sh
+Environment=APP_DIR=/home/ubuntu/spendenlauf KEEP=288
+ExecStart=/home/ubuntu/spendenlauf/backup-db.sh
 ```
 
 And `/etc/systemd/system/spendenlauf-backup.timer`:
@@ -145,29 +145,29 @@ WantedBy=timers.target
 Make the script executable, then enable the timer:
 
 ```bash
-chmod +x /opt/spendenlauf/backup-db.sh
+chmod +x /home/ubuntu/spendenlauf/backup-db.sh
 sudo systemctl daemon-reload
 sudo systemctl enable --now spendenlauf-backup.timer
 
 sudo systemctl list-timers spendenlauf-backup.timer   # when it next fires
 sudo systemctl start spendenlauf-backup.service       # take one now to test
-ls -lt /opt/spendenlauf/backups/                      # newest snapshot on top
+ls -lt /home/ubuntu/spendenlauf/backups/                      # newest snapshot on top
 ```
 
 > **Tip:** for real durability, point `BACKUP_DIR` at a different disk or sync
 > the `backups/` folder offsite (e.g. `rclone`/`rsync` to cloud storage), so a
 > dead disk doesn't take the snapshots with it.
 >
-> Prefer cron? `*/5 * * * * APP_DIR=/opt/spendenlauf KEEP=288 /opt/spendenlauf/backup-db.sh`.
+> Prefer cron? `*/5 * * * * APP_DIR=/home/ubuntu/spendenlauf KEEP=288 /home/ubuntu/spendenlauf/backup-db.sh`.
 
 **Restore** (after stopping the service so nothing is writing):
 
 ```bash
 sudo systemctl stop spendenlauf
-cp /opt/spendenlauf/backups/spendenlauf-YYYYMMDD-HHMMSS.db /opt/spendenlauf/spendenlauf.db
+cp /home/ubuntu/spendenlauf/backups/spendenlauf-YYYYMMDD-HHMMSS.db /home/ubuntu/spendenlauf/spendenlauf.db
 # Clear any stale WAL/SHM sidecars from the old DB:
-rm -f /opt/spendenlauf/spendenlauf.db-wal /opt/spendenlauf/spendenlauf.db-shm
-sudo chown www-data:www-data /opt/spendenlauf/spendenlauf.db
+rm -f /home/ubuntu/spendenlauf/spendenlauf.db-wal /home/ubuntu/spendenlauf/spendenlauf.db-shm
+sudo chown ubuntu:ubuntu /home/ubuntu/spendenlauf/spendenlauf.db
 sudo systemctl start spendenlauf
 ```
 

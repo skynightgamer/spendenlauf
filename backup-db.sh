@@ -12,7 +12,7 @@
 #
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-/opt/spendenlauf}"
+APP_DIR="${APP_DIR:-/home/ubuntu/spendenlauf}"
 DB="${DB:-$APP_DIR/spendenlauf.db}"
 BACKUP_DIR="${BACKUP_DIR:-$APP_DIR/backups}"
 KEEP="${KEEP:-288}"   # e.g. 288 × 5 min ≈ 24h of history
