@@ -257,10 +257,11 @@
           <button id="run-end-btn" disabled>■ Lauf beenden</button>
         </div>
         <div class="hint">
-          <strong>Neuen Lauf starten</strong> löscht alle Daten des vorherigen Laufs
-          (Läufer, Beacons, Runden) und beginnt jetzt bei null — der vorherige Lauf
-          wird vorher automatisch unter „Vergangene Läufe“ gesichert. Vor dem Start
-          werden alle Scans ignoriert, danach beginnt jeder Läufer mit seinem ersten Scan.<br>
+          Lege <strong>vor dem Start</strong> zuerst Beacons und Läufer in den jeweiligen
+          Konfigurationen an. <strong>Neuen Lauf starten</strong> behält diese Einträge,
+          setzt nur Runden und Scans auf null und startet dann die Zeit. Ein noch
+          laufender vorheriger Lauf wird davor automatisch unter „Vergangene Läufe“
+          gesichert. Vor dem Start werden alle Scans ignoriert.<br>
           <strong>Lauf beenden</strong> setzt die echte Endzeit auf jetzt und sichert
           den Lauf. Spätere Scans zählen nicht mehr.
         </div>
@@ -1018,7 +1019,7 @@
       el.className = 'run-status';
       const stopped = new Date(cfg.event_stopped).toLocaleString('de-DE');
       el.innerHTML = `Lauf beendet: <b>${stopped}</b> — Ergebnisse sind final. ` +
-        `„Neuen Lauf starten“ sichert und setzt alles zurück.`;
+        `Du kannst jetzt Läufer und Beacons für den nächsten Lauf vorbereiten.`;
     } else if (cfg.event_start) {
       el.className = 'run-status running';
       const start = new Date(cfg.event_start).toLocaleString('de-DE');
@@ -1065,9 +1066,9 @@
   }
 
   document.getElementById('run-start-btn').addEventListener('click', async () => {
-    if (!confirm('Neuen Lauf starten?\n\nAlle Daten des aktuellen Laufs (Läufer, ' +
-      'Beacons, Runden) werden gelöscht und unter „Vergangene Läufe“ gesichert. ' +
-      'Ab jetzt beginnt ein neuer Lauf bei null.')) return;
+    if (!confirm('Neuen Lauf starten?\n\nVorbereitete Läufer und Beacons bleiben erhalten. ' +
+      'Runden und Scans werden auf null gesetzt; ein noch laufender vorheriger Lauf ' +
+      'wird unter „Vergangene Läufe“ gesichert. Ab jetzt läuft die Zeit.')) return;
     const res = await postRun('/api/run/start');
     if (res && res.ok) {
       runStatusMsg('✔ Neuer Lauf gestartet.', true);

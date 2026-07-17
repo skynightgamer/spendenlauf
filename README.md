@@ -92,7 +92,9 @@ then open `http://localhost:8000/admin` and log in. The admin area has four tabs
   distances and the current map view.
 - **Läufer-Konfiguration** — add / edit / delete runners (Vorname, Nachname,
   donation €/km). The start number is picked from configured beacons, so each
-  runner is tied to a beacon.
+  runner is tied to a beacon. Runners and beacons can be prepared before the
+  official start; starting a run clears only scan/lap progress and keeps this
+  prepared roster.
 - **Beacon-Konfiguration** — pair start numbers with beacon MAC addresses.
   Configure beacons here *before* adding runners.
 - **Einstellungen** — tune the runtime settings (see [Configuration](#configuration))

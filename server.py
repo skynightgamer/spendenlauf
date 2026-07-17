@@ -575,13 +575,18 @@ def ingest_scan(scan: ScanEvent, _: bool = Depends(require_station)):
     # Official start gate: before the run is opened, scans are setup/hand-out/test
     # noise. Keep the station marked alive (above) but don't record or count them.
     event_start = get_setting("event_start", None)
-    if event_start:
-        try:
-            if scan_time < datetime.fromisoformat(event_start):
-                conn.commit(); conn.close()
-                return {"status": "ignored", "reason": "not_started"}
-        except ValueError:
-            pass
+    if not event_start:
+        conn.commit(); conn.close()
+        return {"status": "ignored", "reason": "not_started"}
+    try:
+        if scan_time < datetime.fromisoformat(event_start):
+            conn.commit(); conn.close()
+            return {"status": "ignored", "reason": "not_started"}
+    except ValueError:
+        # Fail closed if a legacy/corrupt start value cannot be parsed. Setup
+        # scans must never become run data merely because the start is invalid.
+        conn.commit(); conn.close()
+        return {"status": "ignored", "reason": "not_started"}
 
     # End gate: once the run has been stopped it's over — scans detected after
     # the stop time are stragglers/teardown and don't count.
@@ -1259,6 +1264,14 @@ def wipe_run_data() -> None:
     conn.commit(); conn.close()
 
 
+def wipe_run_activity() -> None:
+    """Reset timing/lap data while keeping the prepared runners and beacons."""
+    conn = get_db()
+    for t in ("scan_events", "cooldown_tracker", "runner_progress"):
+        conn.execute(f"DELETE FROM {t}")
+    conn.commit(); conn.close()
+
+
 @app.post("/api/reset")
 def reset_all(_: bool = Depends(require_admin)):
     """Wipe all data — admin only."""
@@ -1310,11 +1323,16 @@ def archive_run() -> Optional[int]:
 
 @app.post("/api/run/start")
 def run_start(_: bool = Depends(require_admin)):
-    """Start a fresh run: archive any un-ended run so its data isn't lost, then
-    wipe everything and open the new run from now."""
-    if not get_setting("event_stopped", None):
+    """Start a run with the prepared roster and tag assignments.
+
+    An active previous run is archived first. Only its scan/progress data is
+    reset; runners and beacons deliberately survive so they can be entered and
+    checked before the official clock starts.
+    """
+    if (get_setting("event_start", None)
+            and not get_setting("event_stopped", None)):
         archive_run()
-    wipe_run_data()
+    wipe_run_activity()
     set_setting("event_start", datetime.now().isoformat())
     set_setting("event_end", None)
     set_setting("event_stopped", None)
