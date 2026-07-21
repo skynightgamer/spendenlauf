@@ -18,6 +18,8 @@
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.min.js"
+        integrity="sha256-OqfsQXAGfyz0njzJEepuBcQwxXRnv2I3RW70XkpsIbk=" crossorigin=""></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -156,6 +158,12 @@
     background: var(--accent); color: #fff;
     border: 2px solid #fff; font-weight: 700; font-size: 0.8rem;
     box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+  }
+  .leaflet-routing-container { display: none; }
+  .route-shape-marker {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--surface); border: 3px solid var(--accent-2);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.45);
   }
 
   /* ── Runner config ──────────────────────────── */
@@ -299,7 +307,7 @@
       <div id="station-list"></div>
 
       <div class="section-title">Strecke planen</div>
-      <div class="hint">„Entlang Straßen“ verbindet die Stationen automatisch zu einer Runde, die den echten Wegen folgt.</div>
+      <div class="hint">„Entlang Straßen“ erstellt eine geschlossene Runde. Ziehe danach die grüne Strecke, um sie über andere Wege zu führen. Blaue Punkte kannst du verschieben oder anklicken, um sie zu löschen.</div>
       <div class="btn-row">
         <button id="road-btn" class="primary">Entlang Straßen</button>
         <button id="clear-btn" class="danger">Löschen</button>
@@ -377,7 +385,7 @@
     <div id="tab-settings" class="hidden">
       <div class="runners-wrap">
         <div class="section-title">Einstellungen</div>
-        <div class="hint">Steuern Rundenzählung und Tempoberechnung. Änderungen wirken sofort.</div>
+        <div class="hint">Steuert Rundenzählung, Tempoberechnung und die BLE-Scanner. Serverwerte wirken sofort; Scanner laden neue Werte innerhalb einer Minute.</div>
         <form class="runner-form" id="settings-form">
           <div class="field">
             <label for="cf-checkpoints">Anzahl Stationen</label>
@@ -395,6 +403,18 @@
             <label for="cf-gap">Pausen-Schwelle (s)</label>
             <input type="number" id="cf-gap" min="30" max="3600" step="1" required>
           </div>
+          <div class="field">
+            <label for="cf-report-cooldown">Scanner-Melde-Cooldown (s)</label>
+            <input type="number" id="cf-report-cooldown" min="0" max="3600" step="1" required>
+          </div>
+          <div class="field">
+            <label for="cf-rssi">BLE-RSSI-Schwelle (dBm)</label>
+            <input type="number" id="cf-rssi" min="-100" max="-20" step="1" required>
+          </div>
+          <div class="field">
+            <label for="cf-scan-duration">BLE-Scan-Dauer (s)</label>
+            <input type="number" id="cf-scan-duration" min="1" max="60" step="1" required>
+          </div>
           <button type="submit" class="primary">Speichern</button>
         </form>
         <div class="hint" style="margin-top:1rem;">
@@ -402,6 +422,9 @@
           <strong>Stations-Cooldown:</strong> Mindestabstand zwischen zwei gewerteten Scans derselben Station.<br>
           <strong>Rundenlänge:</strong> wird nur verwendet, wenn keine Strecke auf der Karte gezeichnet wurde.<br>
           <strong>Pausen-Schwelle:</strong> Lücken zwischen Scans, die länger sind, gelten als Pause und zählen nicht zum Tempo.<br>
+          <strong>Scanner-Melde-Cooldown:</strong> verhindert nur wiederholte Übertragungen desselben Beacons; der Stations-Cooldown bleibt die verbindliche Wertungsregel.<br>
+          <strong>BLE-RSSI-Schwelle:</strong> schwächere Signale werden direkt am Scanner verworfen.<br>
+          <strong>BLE-Scan-Dauer:</strong> Dauer eines Scan-Zyklus; längere Zyklen erkennen mehr Signale, reagieren aber langsamer auf neue Einstellungen.<br>
           Spendenziel, Start- und Endzeit findest du unter <strong>Lauf-Steuerung</strong>.
         </div>
         <div class="status" id="settings-status"></div>
@@ -435,11 +458,16 @@
 
   let map = null;
   let routePts = [];          // [[lat,lng], …]
-  let routeLine = null;
+  let routeLine = null;       // saved route shown before the first edit
+  let routingControl = null;
   let routeSegments = null;   // [m, …] leg distances 1→2,2→3,…,N→1
   let lapDistanceM = null;    // full lap length in metres
+  let ensureLoopOnNextRoute = false;
+  let loopRetryInProgress = false;
   const markers = {};         // id → marker
   let stationsData = [];      // [{id, name, …}] from the server
+  const FOOT_ROUTER_URL = 'https://routing.openstreetmap.de/routed-foot/route/v1/foot';
+  const MIN_LOOP_COMPACTNESS = 0.001;
 
   function numIcon(id) {
     return L.divIcon({
@@ -516,9 +544,9 @@
 
     // Existing route + measured distances.
     routePts = (route.route || []).map(p => [p[0], p[1]]);
-    routeSegments = route.segments || null;
-    lapDistanceM  = route.lap_distance_m || null;
-    redrawRoute();
+    routeSegments = routePts.length && Array.isArray(route.segments) &&
+      route.segments.length === stations.length ? route.segments : null;
+    lapDistanceM  = routePts.length ? route.lap_distance_m || null : null;
     renderRouteInfo();
 
     // Station markers — placed at saved coords, else spread near map centre.
@@ -528,9 +556,19 @@
       const lng = s.longitude != null ? s.longitude : center[1] + i * 0.0010;
       const m = L.marker([lat, lng], { draggable: true, icon: numIcon(s.id) }).addTo(map);
       m.on('drag', () => updateCoordLabel(s.id));
-      m.on('dragend', () => updateCoordLabel(s.id));
+      m.on('dragend', () => {
+        updateCoordLabel(s.id);
+        syncStationWaypoint(s.id);
+      });
       markers[s.id] = m;
     });
+
+    buildStationList(stations);
+
+    if (routePts.length) {
+      createRoutingControl(buildLoopWaypoints(route.route_shape || []));
+      drawSavedRoute();
+    }
 
     // Fit view to everything if nothing explicit was saved.
     if (!route.map_view) {
@@ -538,8 +576,6 @@
                           .map(ll => [ll.lat, ll.lng]).concat(routePts);
       if (pts.length) map.fitBounds(pts, { padding: [40, 40] });
     }
-
-    buildStationList(stations);
   }
 
   function buildStationList(stations) {
@@ -566,44 +602,383 @@
       `${ll.lat.toFixed(5)}, ${ll.lng.toFixed(5)}`;
   }
 
-  function redrawRoute() {
+  function orderedStationIds() {
+    return Object.keys(markers).map(Number).sort((a, b) => a - b);
+  }
+
+  function stationWaypoint(id, closesLoop = false) {
+    return new L.Routing.Waypoint(
+      markers[id].getLatLng(), stationName(id), { stationId: id, closesLoop });
+  }
+
+  function waypointStationId(wp) {
+    const id = wp && wp.options && wp.options.stationId;
+    return Number.isInteger(id) ? id : null;
+  }
+
+  function buildLoopWaypoints(shapePoints = []) {
+    const ids = orderedStationIds();
+    if (!ids.length) return [];
+    const byStation = {};
+    shapePoints.forEach(p => {
+      const id = Number(p.after_station_id);
+      if (!markers[id] || !Number.isFinite(p.latitude) || !Number.isFinite(p.longitude)) return;
+      (byStation[id] ||= []).push(L.latLng(p.latitude, p.longitude));
+    });
+
+    const waypoints = [];
+    ids.forEach(id => {
+      waypoints.push(stationWaypoint(id));
+      (byStation[id] || []).forEach(ll => {
+        waypoints.push(new L.Routing.Waypoint(ll, '', { shapePoint: true }));
+      });
+    });
+    waypoints.push(stationWaypoint(ids[0], true));
+    return waypoints;
+  }
+
+  function findRouteWaypointIndices(coordinates, waypoints) {
+    if (!coordinates.length || !waypoints.length) return [];
+    const indices = [0];
+    let cursor = 0;
+    for (let i = 1; i < waypoints.length; i++) {
+      if (i === waypoints.length - 1) {
+        indices.push(coordinates.length - 1);
+        break;
+      }
+      let best = cursor;
+      let bestDistance = Infinity;
+      for (let j = cursor; j < coordinates.length; j++) {
+        const distance = waypoints[i].latLng.distanceTo(coordinates[j]);
+        if (distance < bestDistance) {
+          best = j;
+          bestDistance = distance;
+        }
+      }
+      indices.push(best);
+      cursor = best;
+    }
+    return indices;
+  }
+
+  function closedRouteCoordinates(coordinates) {
+    const points = coordinates.map(p => L.latLng(p));
+    if (points.length < 2) return points;
+    if (points[0].distanceTo(points[points.length - 1]) > 0.5) {
+      points.push(L.latLng(points[0]));
+    } else {
+      points[points.length - 1] = L.latLng(points[0]);
+    }
+    return points;
+  }
+
+  function loopCompactness(coordinates) {
+    if (coordinates.length < 4) return 0;
+    const centerLat = coordinates.reduce((sum, p) => sum + p.lat, 0) / coordinates.length;
+    const centerLng = coordinates.reduce((sum, p) => sum + p.lng, 0) / coordinates.length;
+    const xScale = 111320 * Math.cos(centerLat * Math.PI / 180);
+    const xy = coordinates.map(p => [
+      (p.lng - centerLng) * xScale,
+      (p.lat - centerLat) * 110540,
+    ]);
+    let twiceArea = 0;
+    let perimeter = 0;
+    for (let i = 1; i < xy.length; i++) {
+      twiceArea += xy[i - 1][0] * xy[i][1] - xy[i][0] * xy[i - 1][1];
+      perimeter += coordinates[i - 1].distanceTo(coordinates[i]);
+    }
+    return perimeter ? Math.abs(twiceArea) / 2 / (perimeter * perimeter) : 0;
+  }
+
+  function buildAutomaticLoopWaypoints() {
+    const ids = orderedStationIds();
+    const points = ids.map(id => markers[id].getLatLng());
+    const center = L.latLng(
+      points.reduce((sum, p) => sum + p.lat, 0) / points.length,
+      points.reduce((sum, p) => sum + p.lng, 0) / points.length);
+    const xScale = 111320 * Math.cos(center.lat * Math.PI / 180);
+    const toXY = p => [(p.lng - center.lng) * xScale, (p.lat - center.lat) * 110540];
+    const fromXY = p => L.latLng(center.lat + p[1] / 110540, center.lng + p[0] / xScale);
+    const xy = points.map(toXY);
+
+    let span = 0;
+    for (let i = 0; i < points.length; i++) {
+      for (let j = i + 1; j < points.length; j++) {
+        span = Math.max(span, points[i].distanceTo(points[j]));
+      }
+    }
+    const detour = Math.max(50, Math.min(250, span * 0.25));
+    const stationLoop = closedRouteCoordinates(points.concat(points.length ? [points[0]] : []));
+    const stationsAreNarrow = loopCompactness(stationLoop) < MIN_LOOP_COMPACTNESS * 2;
+    const waypoints = [];
+
+    ids.forEach((id, i) => {
+      const next = (i + 1) % ids.length;
+      const a = xy[i];
+      const b = xy[next];
+      const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      let direction = [mid[0], mid[1]];
+      if (stationsAreNarrow || Math.hypot(direction[0], direction[1]) < detour * 0.2) {
+        direction = [-(b[1] - a[1]), b[0] - a[0]];
+      }
+      const magnitude = Math.hypot(direction[0], direction[1]) || 1;
+      const anchor = [
+        mid[0] + direction[0] / magnitude * detour,
+        mid[1] + direction[1] / magnitude * detour,
+      ];
+      waypoints.push(stationWaypoint(id));
+      waypoints.push(new L.Routing.Waypoint(fromXY(anchor), '', {
+        shapePoint: true, automatic: true,
+      }));
+    });
+    waypoints.push(stationWaypoint(ids[0], true));
+    return waypoints;
+  }
+
+  function footRouter() {
+    return {
+      route(waypoints, callback, context) {
+        const controller = new AbortController();
+        const coordStr = waypoints.map(wp => `${wp.latLng.lng},${wp.latLng.lat}`).join(';');
+        const fail = err => {
+          if (err.name === 'AbortError') return;
+          callback.call(context || callback, {
+            status: -1, type: 'routing', message: err.message,
+          });
+        };
+        fetch(`${FOOT_ROUTER_URL}/${coordStr}?overview=full&geometries=geojson`, {
+          signal: controller.signal,
+        }).then(res => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        }).then(data => {
+          if (data.code !== 'Ok' || !data.routes || !data.routes.length) {
+            fail(new Error(data.message || data.code || 'Keine Route gefunden'));
+            return;
+          }
+          const result = data.routes[0];
+          const coordinates = result.geometry.coordinates.map(([lng, lat]) => L.latLng(lat, lng));
+          const snappedWaypoints = (data.waypoints || []).map((wp, i) =>
+            new L.Routing.Waypoint(
+              [wp.location[1], wp.location[0]], waypoints[i].name, waypoints[i].options));
+          callback.call(context || callback, null, [{
+            name: '',
+            coordinates,
+            instructions: [],
+            inputWaypoints: waypoints,
+            waypoints: snappedWaypoints.length === waypoints.length ? snappedWaypoints : waypoints,
+            waypointIndices: findRouteWaypointIndices(coordinates, waypoints),
+            legDistances: result.legs.map(leg => leg.distance),
+            summary: { totalDistance: result.distance, totalTime: result.duration },
+          }]);
+        }, fail);
+        return { abort: () => controller.abort() };
+      },
+    };
+  }
+
+  function shapeMarker(index, wp, getControl) {
+    if (waypointStationId(wp) !== null) return null;
+    const marker = L.marker(wp.latLng, {
+      draggable: true,
+      icon: L.divIcon({
+        className: '', html: '<div class="route-shape-marker"></div>',
+        iconSize: [22, 22], iconAnchor: [11, 11],
+      }),
+    });
+    marker.bindTooltip('Ziehen zum Verschieben · Klicken zum Löschen');
+    marker.on('click', e => {
+      L.DomEvent.stopPropagation(e);
+      const control = getControl();
+      const current = control && control.getWaypoints()[index];
+      if (current && waypointStationId(current) === null) control.spliceWaypoints(index, 1);
+    });
+    return marker;
+  }
+
+  function setRoutingBusy(busy) {
+    document.getElementById('road-btn').disabled = busy;
+    document.getElementById('save-btn').disabled = busy;
+  }
+
+  function removeStaticRouteLine() {
     if (routeLine) map.removeLayer(routeLine);
-    routeLine = L.polyline(routePts, { color: '#16a34a', weight: 4 }).addTo(map);
+    routeLine = null;
+  }
+
+  function removeRoutingControl() {
+    if (!routingControl) return;
+    const oldControl = routingControl;
+    routingControl = null;
+    if (oldControl._pendingRequest && oldControl._pendingRequest.abort) {
+      oldControl._pendingRequest.abort();
+    }
+    map.removeControl(oldControl);
+    setRoutingBusy(false);
+  }
+
+  function calculateStationSegments(route) {
+    const waypoints = route.inputWaypoints || [];
+    const legs = route.legDistances || [];
+    const segments = [];
+    let distance = 0;
+    for (let i = 0; i < legs.length; i++) {
+      distance += legs[i];
+      if (waypointStationId(waypoints[i + 1]) !== null) {
+        segments.push(Math.round(distance * 10) / 10);
+        distance = 0;
+      }
+    }
+    return segments.length === orderedStationIds().length ? segments : null;
+  }
+
+  function applyCalculatedRoute(route) {
+    route.coordinates = closedRouteCoordinates(route.coordinates);
+    route.waypointIndices = findRouteWaypointIndices(route.coordinates, route.inputWaypoints);
+    routePts = route.coordinates.map(p => [p.lat, p.lng]);
+    routeSegments = calculateStationSegments(route);
+    lapDistanceM = Math.round(route.summary.totalDistance * 10) / 10;
+    removeStaticRouteLine();
+    renderRouteInfo();
+  }
+
+  function createRoutingControl(waypoints) {
+    removeRoutingControl();
+    let control = null;
+    const plan = L.Routing.plan(waypoints, {
+      draggableWaypoints: true,
+      routeWhileDragging: false,
+      addWaypoints: true,
+      createMarker: (i, wp) => shapeMarker(i, wp, () => control),
+    });
+    control = L.Routing.control({
+      plan,
+      router: footRouter(),
+      autoRoute: false,
+      show: false,
+      collapsible: false,
+      fitSelectedRoutes: false,
+      addWaypoints: true,
+      defaultErrorHandler: null,
+      lineOptions: {
+        styles: [
+          { color: '#16a34a', opacity: 0.01, weight: 18 },
+          { color: '#16a34a', opacity: 1, weight: 5 },
+        ],
+        missingRouteStyles: [{ color: '#16a34a', opacity: 0.65, weight: 4, dashArray: '7,8' }],
+      },
+    });
+    routingControl = control;
+
+    control.on('routingstart', () => {
+      if (control === routingControl) setRoutingBusy(true);
+    });
+    control.on('routesfound', e => {
+      if (control !== routingControl || !e.routes.length) return;
+      const route = e.routes[0];
+      route.coordinates = closedRouteCoordinates(route.coordinates);
+      route.waypointIndices = findRouteWaypointIndices(route.coordinates, route.inputWaypoints);
+      const collapsed = loopCompactness(route.coordinates) < MIN_LOOP_COMPACTNESS;
+      if (ensureLoopOnNextRoute && collapsed && !loopRetryInProgress) {
+        loopRetryInProgress = true;
+        const status = document.getElementById('status');
+        status.className = 'status';
+        status.textContent = 'Die kürzeste Verbindung ist keine Runde — Rundenschleife wird ergänzt…';
+        control.setWaypoints(buildAutomaticLoopWaypoints());
+        return;
+      }
+
+      ensureLoopOnNextRoute = false;
+      loopRetryInProgress = false;
+      applyCalculatedRoute(route);
+      setRoutingBusy(false);
+      const status = document.getElementById('status');
+      status.className = collapsed ? 'status err' : 'status ok';
+      status.textContent = collapsed
+        ? 'Die Strecke ist geschlossen, nutzt aber teilweise denselben Weg. Ziehe die Linie seitlich, um die Runde zu formen.'
+        : '✔ Geschlossene Runde erstellt — Strecke zum Anpassen ziehen oder speichern.';
+    });
+    control.on('routingerror', () => {
+      if (control !== routingControl) return;
+      ensureLoopOnNextRoute = false;
+      loopRetryInProgress = false;
+      setRoutingBusy(false);
+      const status = document.getElementById('status');
+      status.className = 'status err';
+      status.textContent = 'Routing fehlgeschlagen (Router nicht erreichbar oder kein Fußweg gefunden).';
+    });
+    control.addTo(map);
+    control.options.autoRoute = true;
+    return control;
+  }
+
+  function drawSavedRoute() {
+    removeStaticRouteLine();
+    if (!routePts.length) return;
+    const waypoints = routingControl ? routingControl.getWaypoints() : [];
+    const coordinates = routePts.map(p => L.latLng(p));
+    routeLine = L.Routing.line({
+      coordinates,
+      inputWaypoints: waypoints,
+      waypointIndices: findRouteWaypointIndices(coordinates, waypoints),
+    }, {
+      styles: [
+        { color: '#16a34a', opacity: 0.01, weight: 18 },
+        { color: '#16a34a', opacity: 1, weight: 5 },
+      ],
+      addWaypoints: Boolean(routingControl),
+      extendToWaypoints: false,
+    }).addTo(map);
+    if (routingControl) {
+      routeLine.on('linetouched', e => routingControl.getPlan().dragNewWaypoint(e));
+    }
+  }
+
+  function syncStationWaypoint(id) {
+    if (!routingControl || !routePts.length) return;
+    const latLng = markers[id].getLatLng();
+    const waypoints = routingControl.getWaypoints();
+    waypoints.forEach(wp => {
+      if (waypointStationId(wp) === id) wp.latLng = L.latLng(latLng);
+    });
+    const status = document.getElementById('status');
+    status.className = 'status';
+    status.textContent = 'Strecke wird an die verschobene Station angepasst…';
+    routingControl.setWaypoints(waypoints);
+  }
+
+  function routeShapePayload() {
+    if (!routingControl || !routePts.length) return [];
+    let afterStationId = null;
+    const shape = [];
+    routingControl.getWaypoints().forEach(wp => {
+      const stationId = waypointStationId(wp);
+      if (stationId !== null) {
+        afterStationId = stationId;
+      } else if (afterStationId !== null) {
+        shape.push({
+          after_station_id: afterStationId,
+          latitude: wp.latLng.lat,
+          longitude: wp.latLng.lng,
+        });
+      }
+    });
+    return shape;
   }
 
   // ── Route along real streets (OSRM) ───────────
-  document.getElementById('road-btn').addEventListener('click', async () => {
+  document.getElementById('road-btn').addEventListener('click', () => {
     const status = document.getElementById('status');
-    status.className = 'status';
-    status.textContent = 'Route entlang der Straßen wird berechnet…';
-
-    // Visit stations in id order, then close the loop back to the first.
-    const ids = Object.keys(markers).map(Number).sort((a, b) => a - b);
-    const stops = ids.map(id => markers[id].getLatLng());
-    if (stops.length < 2) { status.textContent = 'Zu wenige Stationen.'; return; }
-    stops.push(stops[0]);
-    const coordStr = stops.map(ll => `${ll.lng},${ll.lat}`).join(';');
-
-    try {
-      // FOSSGIS foot router — follows footpaths & Feldwege (e.g. Englischer Garten),
-      // not just drivable roads.
-      const res = await fetch(
-        `https://routing.openstreetmap.de/routed-foot/route/v1/foot/${coordStr}` +
-        `?overview=full&geometries=geojson`);
-      const data = await res.json();
-      if (data.code !== 'Ok' || !data.routes.length) throw new Error(data.code);
-      const rt = data.routes[0];
-      routePts = rt.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
-      routeSegments = rt.legs.map(l => Math.round(l.distance * 10) / 10);
-      lapDistanceM  = Math.round(rt.distance * 10) / 10;
-      redrawRoute();
-      renderRouteInfo();
-      status.className = 'status ok';
-      status.textContent = '✔ Strecke entlang der Wege erstellt — zum Übernehmen speichern.';
-    } catch (err) {
+    if (orderedStationIds().length < 2) {
       status.className = 'status err';
-      status.textContent = 'Routing fehlgeschlagen (Router nicht erreichbar).';
+      status.textContent = 'Zu wenige Stationen.';
+      return;
     }
+    status.className = 'status';
+    status.textContent = 'Geschlossene Route entlang der Wege wird berechnet…';
+    ensureLoopOnNextRoute = true;
+    loopRetryInProgress = false;
+    createRoutingControl(buildLoopWaypoints()).route();
   });
 
   function fmtDist(m) {
@@ -634,7 +1009,7 @@
   // ── Route tools ───────────────────────────────
   document.getElementById('clear-btn').addEventListener('click', () => {
     routePts = []; routeSegments = null; lapDistanceM = null;
-    renderRouteInfo(); redrawRoute();
+    removeRoutingControl(); removeStaticRouteLine(); renderRouteInfo();
   });
 
   // ── Save ──────────────────────────────────────
@@ -658,6 +1033,7 @@
       map_view: { center: [c.lat, c.lng], zoom: map.getZoom() },
       segments: routeSegments,
       lap_distance_m: lapDistanceM,
+      route_shape: routeShapePayload(),
     };
 
     try {
@@ -962,6 +1338,9 @@
     document.getElementById('cf-cooldown').value    = cfg.cooldown_seconds;
     document.getElementById('cf-lap').value         = cfg.lap_distance_km;
     document.getElementById('cf-gap').value         = cfg.moving_gap_max_seconds;
+    document.getElementById('cf-report-cooldown').value = cfg.station_report_cooldown_seconds;
+    document.getElementById('cf-rssi').value            = cfg.rssi_threshold;
+    document.getElementById('cf-scan-duration').value   = cfg.scan_duration_seconds;
   }
 
   document.getElementById('settings-form').addEventListener('submit', async (e) => {
@@ -980,6 +1359,9 @@
       cooldown_seconds:       parseInt(document.getElementById('cf-cooldown').value, 10),
       lap_distance_km:        parseFloat(document.getElementById('cf-lap').value),
       moving_gap_max_seconds: parseInt(document.getElementById('cf-gap').value, 10),
+      station_report_cooldown_seconds: parseInt(document.getElementById('cf-report-cooldown').value, 10),
+      rssi_threshold:                  parseInt(document.getElementById('cf-rssi').value, 10),
+      scan_duration_seconds:           parseInt(document.getElementById('cf-scan-duration').value, 10),
     };
     const res = await fetch(`${API}/api/config`, {
       method: 'PUT',

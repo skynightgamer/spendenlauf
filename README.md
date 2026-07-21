@@ -79,6 +79,24 @@ X-API-Key: <STATION_API_KEY>
 → { "macs": ["AA:BB:CC:DD:EE:01", ...] }
 ```
 
+**Fetch scanner settings** (stations use firmware defaults if this fails and
+retry once per minute):
+
+```
+GET /api/station/config
+X-API-Key: <STATION_API_KEY>
+
+→ {
+    "report_cooldown_seconds": 10,
+    "rssi_threshold": -80,
+    "scan_duration_seconds": 4
+  }
+```
+
+The report cooldown only suppresses duplicate transmissions from an ESP32. It
+is deliberately separate from `cooldown_seconds`, which remains the server's
+authoritative rule for whether a scan counts.
+
 ## Admin panel & map
 
 Create a `.env` (copy `.env.example`) with `ADMIN_USERNAME` / `ADMIN_PASSWORD`,
@@ -87,9 +105,12 @@ then open `http://localhost:8000/admin` and log in. The admin area has four tabs
 - **Karten-Konfiguration** — station/route map editor (Leaflet + OpenStreetMap).
   Drag the numbered station markers onto their real spots and rename them;
   **Entlang Straßen** auto-connects them into a lap that follows real footpaths
-  (incl. trails / Feldwege, via the public FOSSGIS foot router) and shows the lap
-  length and per-segment distances; **Speichern** saves coordinates, route,
-  distances and the current map view.
+  (incl. trails / Feldwege, via the public FOSSGIS foot router). If the shortest
+  connections collapse into an out-and-back route, the editor adds shaping
+  points to form a loop. Drag the green route to add a blue shaping point; drag
+  that point to reroute along other paths, or click it to remove it. The lap
+  length and per-segment distances update after every edit; **Speichern** saves
+  coordinates, route, shaping points, distances and the current map view.
 - **Läufer-Konfiguration** — add / edit / delete runners (Vorname, Nachname,
   donation €/km). The start number is picked from configured beacons, so each
   runner is tied to a beacon. Runners and beacons can be prepared before the
@@ -107,17 +128,21 @@ excluded so a runner resting in the field isn't counted as slow.
 
 ## Configuration
 
-These four settings are tunable at runtime from the **Einstellungen** tab (or
+These seven settings are tunable at runtime from the **Einstellungen** tab (or
 `PUT /api/config`). The override is stored in the database and takes effect on the
-next scan / refresh — no restart. The constants at the top of `server.py` are just
-the **defaults** used until an override is saved.
+next scan / refresh — no restart. ESP32 stations refresh their three scanner
+settings once per minute. The constants at the top of `server.py` are just the
+**defaults** used until an override is saved.
 
-| Key / constant                                      | Default | Meaning                                                        |
-| --------------------------------------------------- | ------- | -------------------------------------------------------------- |
-| `checkpoint_count` / `CHECKPOINT_COUNT`             | 5       | Number of stations around the loop                             |
-| `cooldown_seconds` / `COOLDOWN_SECONDS`             | 180     | Ignore re-scans of the same station within this window         |
-| `lap_distance_km` / `LAP_DISTANCE_KM`               | 2.0     | Fallback loop length when no route has been drawn              |
-| `moving_gap_max_seconds` / `MOVING_GAP_MAX_SECONDS` | 300     | Scan gaps longer than this count as a rest, excluded from pace |
+| Key / constant                                                              | Default | Meaning                                                        |
+| --------------------------------------------------------------------------- | ------- | -------------------------------------------------------------- |
+| `checkpoint_count` / `CHECKPOINT_COUNT`                                     | 5       | Number of stations around the loop                             |
+| `cooldown_seconds` / `COOLDOWN_SECONDS`                                     | 180     | Ignore re-scans of the same station within this window         |
+| `lap_distance_km` / `LAP_DISTANCE_KM`                                       | 2.0     | Fallback loop length when no route has been drawn              |
+| `moving_gap_max_seconds` / `MOVING_GAP_MAX_SECONDS`                         | 300     | Scan gaps longer than this count as a rest, excluded from pace |
+| `station_report_cooldown_seconds` / `STATION_REPORT_COOLDOWN_SECONDS`       | 10      | Suppress duplicate transmissions from each scanner             |
+| `rssi_threshold` / `RSSI_THRESHOLD`                                         | -80     | Weakest BLE signal in dBm that a scanner reports               |
+| `scan_duration_seconds` / `SCAN_DURATION_SECONDS`                           | 4       | Duration of each BLE scan cycle                                |
 
 > **`checkpoint_count` is structural.** Changing it mid-event invalidates
 > in-flight laps and assumes the physical stations match, so the admin UI confirms

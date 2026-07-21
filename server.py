@@ -30,6 +30,9 @@ CHECKPOINT_COUNT = 5          # Stations around the loop
 COOLDOWN_SECONDS = 180        # 3 min per-station cooldown
 LAP_DISTANCE_KM  = 2.0        # Loop length in km
 DONATION_GOAL    = 0.0        # Fundraising target in €; 0 hides the dashboard goal bar
+STATION_REPORT_COOLDOWN_SECONDS = 10  # Scanner-side duplicate suppression
+RSSI_THRESHOLD = -80          # Weakest BLE signal a scanner reports
+SCAN_DURATION_SECONDS = 4     # Length of one BLE scan cycle
 # Pace is based on "moving time": gaps between scans longer than this are
 # treated as a rest (the runner left the loop for the field) and excluded.
 # Normal loop segments are well under this; a rest excursion is far longer.
@@ -268,11 +271,14 @@ def touch_station(c: sqlite3.Cursor, station_id: int,
 # key -> (default, caster, min, max). Stored in `settings` as "cfg_<key>"; the
 # module constants above are the defaults when nothing has been saved yet.
 CONFIG_SPEC = {
-    "checkpoint_count":       (CHECKPOINT_COUNT,       int,   2,   20),
-    "cooldown_seconds":       (COOLDOWN_SECONDS,       int,   0,   3600),
-    "lap_distance_km":        (LAP_DISTANCE_KM,        float, 0.1, 100.0),
-    "moving_gap_max_seconds": (MOVING_GAP_MAX_SECONDS, int,   30,  3600),
-    "donation_goal":          (DONATION_GOAL,          float, 0.0, 1_000_000.0),
+    "checkpoint_count":                (CHECKPOINT_COUNT,                 int,   2,   20),
+    "cooldown_seconds":                (COOLDOWN_SECONDS,                 int,   0,   3600),
+    "lap_distance_km":                 (LAP_DISTANCE_KM,                  float, 0.1, 100.0),
+    "moving_gap_max_seconds":          (MOVING_GAP_MAX_SECONDS,           int,   30,  3600),
+    "donation_goal":                   (DONATION_GOAL,                    float, 0.0, 1_000_000.0),
+    "station_report_cooldown_seconds": (STATION_REPORT_COOLDOWN_SECONDS,  int,   0,   3600),
+    "rssi_threshold":                  (RSSI_THRESHOLD,                   int,  -100, -20),
+    "scan_duration_seconds":           (SCAN_DURATION_SECONDS,            int,   1,   60),
 }
 
 
@@ -370,18 +376,27 @@ class StationUpdate(BaseModel):
     latitude:  Optional[float] = None
     longitude: Optional[float] = None
 
+class RouteShapePoint(BaseModel):
+    after_station_id: int
+    latitude:         float
+    longitude:        float
+
 class RouteUpdate(BaseModel):
     route:          List[List[float]]        # ordered [lat, lng] points
     map_view:       Optional[dict]          = None  # {"center": [lat,lng], "zoom": int}
     segments:       Optional[List[float]]   = None  # leg distances in m: 1→2,2→3,…,N→1
     lap_distance_m: Optional[float]         = None  # full lap length in metres
+    route_shape:    Optional[List[RouteShapePoint]] = None  # draggable via points
 
 class ConfigUpdate(BaseModel):
-    checkpoint_count:       Optional[int]   = None
-    cooldown_seconds:       Optional[int]   = None
-    lap_distance_km:        Optional[float] = None
-    moving_gap_max_seconds: Optional[int]   = None
-    donation_goal:          Optional[float] = None
+    checkpoint_count:                Optional[int]   = None
+    cooldown_seconds:                Optional[int]   = None
+    lap_distance_km:                 Optional[float] = None
+    moving_gap_max_seconds:          Optional[int]   = None
+    donation_goal:                   Optional[float] = None
+    station_report_cooldown_seconds: Optional[int]   = None
+    rssi_threshold:                  Optional[int]   = None
+    scan_duration_seconds:           Optional[int]   = None
     # ISO datetimes (e.g. "2026-06-24T16:00"); "" clears them. event_start is the
     # official opening: scans before it are ignored. event_end drives the
     # dashboard projection of the final totals.
@@ -456,6 +471,7 @@ def get_route():
         "map_view":       get_setting("map_view", None),
         "segments":       get_setting("segments", None),
         "lap_distance_m": get_setting("lap_distance_m", None),
+        "route_shape":    get_setting("route_shape", []),
     }
 
 
@@ -464,10 +480,12 @@ def update_route(data: RouteUpdate, _: bool = Depends(require_admin)):
     set_setting("route", data.route)
     if data.map_view is not None:
         set_setting("map_view", data.map_view)
-    if data.segments is not None:
+    if "segments" in data.model_fields_set:
         set_setting("segments", data.segments)
-    if data.lap_distance_m is not None:
+    if "lap_distance_m" in data.model_fields_set:
         set_setting("lap_distance_m", data.lap_distance_m)
+    if "route_shape" in data.model_fields_set:
+        set_setting("route_shape", [p.model_dump() for p in data.route_shape or []])
     return {"status": "ok"}
 
 
@@ -522,6 +540,16 @@ def update_config(data: ConfigUpdate, _: bool = Depends(require_admin)):
     if "checkpoint_count" in fields and fields["checkpoint_count"] is not None:
         sync_stations(get_config("checkpoint_count"))
     return {"status": "ok", "config": config_payload()}
+
+
+@app.get("/api/station/config")
+def station_config(_: bool = Depends(require_station)):
+    """Runtime scanner settings, kept separate from server-side lap filtering."""
+    return {
+        "report_cooldown_seconds": get_config("station_report_cooldown_seconds"),
+        "rssi_threshold": get_config("rssi_threshold"),
+        "scan_duration_seconds": get_config("scan_duration_seconds"),
+    }
 
 
 # Scan ingestion + lap reconstruction
